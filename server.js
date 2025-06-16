@@ -1,5 +1,5 @@
 // =================================================================
-// ==      FILE FINAL: server.js (dengan Fitur Lupa Password)   ==
+// == FILE FINAL: server.js (dengan Fitur Lupa Password & Custom Slug) ==
 // =================================================================
 
 const express = require('express');
@@ -114,24 +114,18 @@ app.post('/api/forgot-password', async (req, res) => {
         const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
         const user = result.rows[0];
 
-        // Demi keamanan, kita selalu kirim pesan sukses meskipun email tidak ditemukan
         if (!user) {
             return res.json({ message: 'Jika email terdaftar, link untuk reset password telah dikirim.' });
         }
 
-        // Buat token reset yang aman dan unik
         const resetToken = crypto.randomBytes(32).toString('hex');
-        // Token berlaku selama 1 jam
         const tokenExpires = new Date(Date.now() + 3600000); 
 
-        // Simpan token dan waktu kedaluwarsa ke database
         await pool.query(
             'UPDATE users SET reset_token = $1, reset_token_expires = $2 WHERE email = $3',
             [resetToken, tokenExpires, email]
         );
 
-        // Kirim email ke pengguna
-        // Ganti 'hamdirzl.my.id' dengan domain frontend Anda yang sebenarnya jika berbeda
         const resetUrl = `https://hamdirzl.my.id/reset-password.html?token=${resetToken}`;
 
         await transporter.sendMail({
@@ -151,7 +145,6 @@ app.post('/api/forgot-password', async (req, res) => {
 
     } catch (error) {
         console.error('Error di forgot-password:', error);
-        // Jangan kirim detail error ke pengguna, cukup pesan umum
         res.status(500).json({ error: 'Terjadi kesalahan saat memproses permintaan.' });
     }
 });
@@ -165,7 +158,6 @@ app.post('/api/reset-password', async (req, res) => {
             return res.status(400).json({ error: 'Token dan password baru diperlukan.' });
         }
 
-        // Cari pengguna dengan token yang valid dan belum kedaluwarsa
         const result = await pool.query(
             'SELECT * FROM users WHERE reset_token = $1 AND reset_token_expires > NOW()',
             [token]
@@ -176,10 +168,8 @@ app.post('/api/reset-password', async (req, res) => {
             return res.status(400).json({ error: 'Token tidak valid atau sudah kedaluwarsa.' });
         }
 
-        // Hash password baru
         const passwordHash = await bcrypt.hash(password, 10);
         
-        // Update password dan hapus token dari database
         await pool.query(
             'UPDATE users SET password_hash = $1, reset_token = NULL, reset_token_expires = NULL WHERE id = $2',
             [passwordHash, user.id]
@@ -223,16 +213,31 @@ app.get('/api/moods', authenticateToken, async (req, res) => {
     }
 });
 
-// ============== KODE UNTUK LINK PENDEK ==============
+// ============== KODE UNTUK LINK PENDEK (DENGAN CUSTOM SLUG) ==============
 app.post('/api/shorten', async (req, res) => {
     try {
-        const { original_url } = req.body;
+        const { original_url, custom_slug } = req.body;
 
         if (!original_url || !(original_url.startsWith('http://') || original_url.startsWith('https://'))) {
             return res.status(400).json({ error: 'URL tidak valid. Harus diawali dengan http:// atau https://' });
         }
 
-        const slug = generateSlug();
+        let slug;
+
+        if (custom_slug) {
+            const slugRegex = /^[a-zA-Z0-9-]+$/;
+            if (!slugRegex.test(custom_slug)) {
+                return res.status(400).json({ error: 'Nama kustom hanya boleh berisi huruf, angka, dan tanda hubung (-).' });
+            }
+
+            const existingLink = await pool.query('SELECT slug FROM links WHERE slug = $1', [custom_slug]);
+            if (existingLink.rows.length > 0) {
+                return res.status(409).json({ error: 'Nama kustom ini sudah digunakan. Silakan coba yang lain.' });
+            }
+            slug = custom_slug;
+        } else {
+            slug = generateSlug();
+        }
 
         const newLink = await pool.query(
             'INSERT INTO links (original_url, slug) VALUES ($1, $2) RETURNING slug',

@@ -1,13 +1,13 @@
 // =================================================================
-// == FILE FINAL: server.js (dengan Fitur Lupa Password & Custom Slug) ==
+// == FILE FINAL: server.js (dengan Fitur Admin & Hapus Link)    ==
 // =================================================================
 
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const crypto = require('crypto'); // Library bawaan Node.js untuk token acak
-const nodemailer = require('nodemailer'); // Library baru untuk email
+const crypto = require('crypto');
+const nodemailer = require('nodemailer');
 const { Pool } = require('pg');
 
 // === KONFIGURASI DATABASE ===
@@ -21,7 +21,6 @@ const JWT_SECRET = 'ini-adalah-kunci-rahasia-yang-sangat-aman-dan-panjang';
 function generateSlug() { return Math.random().toString(36).substring(2, 8); }
 
 // === KONFIGURASI PENGIRIM EMAIL (NODEMAILER) ===
-// Mengambil kredensial dari Environment Variables di Render
 const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
@@ -30,6 +29,7 @@ const transporter = nodemailer.createTransport({
     }
 });
 
+// === MIDDLEWARE ===
 function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
@@ -41,6 +41,16 @@ function authenticateToken(req, res, next) {
         next();
     });
 }
+
+function authenticateAdmin(req, res, next) {
+    authenticateToken(req, res, () => {
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({ error: 'Akses ditolak. Fitur ini hanya untuk admin.' });
+        }
+        next();
+    });
+}
+
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -90,7 +100,7 @@ app.post('/api/login', async (req, res) => {
         if (!isPasswordCorrect) return res.status(401).json({ error: 'Email atau password salah.' });
 
         const ipAddress = req.ip; 
-        console.log(`Login Berhasil: Pengguna '${user.email}' (ID: ${user.id}) masuk dari IP: ${ipAddress}`);
+        console.log(`Login Berhasil: Pengguna '${user.email}' (ID: ${user.id}, Role: ${user.role}) masuk dari IP: ${ipAddress}`);
         
         const userAgent = req.headers['user-agent'];
         pool.query(
@@ -98,7 +108,7 @@ app.post('/api/login', async (req, res) => {
             [user.id, ipAddress, userAgent]
         ).catch(err => console.error('Gagal mencatat aktivitas login ke DB:', err)); 
         
-        const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '1h' });
+        const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '1h' });
         res.json({ message: 'Login berhasil!', token });
 
     } catch (error) {
@@ -107,7 +117,6 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// [ENDPOINT BARU] LUPA PASSWORD
 app.post('/api/forgot-password', async (req, res) => {
     try {
         const { email } = req.body;
@@ -132,13 +141,7 @@ app.post('/api/forgot-password', async (req, res) => {
             to: user.email,
             from: `"Ekosistem Hamdi" <${process.env.EMAIL_USER}>`,
             subject: 'Reset Password Akun Anda',
-            html: `
-                <p>Anda menerima email ini karena ada permintaan untuk mereset password akun Anda.</p>
-                <p>Silakan klik link di bawah ini untuk melanjutkan:</p>
-                <a href="${resetUrl}">${resetUrl}</a>
-                <p>Link ini hanya berlaku selama 1 jam.</p>
-                <p>Jika Anda tidak merasa meminta ini, abaikan saja email ini.</p>
-            `
+            html: `<p>Anda menerima email ini karena ada permintaan untuk mereset password akun Anda.</p><p>Silakan klik link di bawah ini untuk melanjutkan:</p><a href="${resetUrl}">${resetUrl}</a><p>Link ini hanya berlaku selama 1 jam.</p><p>Jika Anda tidak merasa meminta ini, abaikan saja email ini.</p>`
         });
 
         res.json({ message: 'Jika email terdaftar, link untuk reset password telah dikirim.' });
@@ -149,7 +152,6 @@ app.post('/api/forgot-password', async (req, res) => {
     }
 });
 
-// [ENDPOINT BARU] RESET PASSWORD
 app.post('/api/reset-password', async (req, res) => {
     try {
         const { token, password } = req.body;
@@ -213,7 +215,7 @@ app.get('/api/moods', authenticateToken, async (req, res) => {
     }
 });
 
-// ============== KODE UNTUK LINK PENDEK (DENGAN CUSTOM SLUG) ==============
+// === ROUTES URL SHORTENER ===
 app.post('/api/shorten', async (req, res) => {
     try {
         const { original_url, custom_slug } = req.body;
@@ -255,6 +257,34 @@ app.post('/api/shorten', async (req, res) => {
     }
 });
 
+// === ROUTES ADMIN ===
+app.get('/api/links', authenticateAdmin, async (req, res) => {
+    try {
+        const result = await pool.query('SELECT slug, original_url, created_at FROM links ORDER BY created_at DESC');
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Error mengambil semua link:', error);
+        res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+    }
+});
+
+app.delete('/api/links/:slug', authenticateAdmin, async (req, res) => {
+    try {
+        const { slug } = req.params;
+        const result = await pool.query('DELETE FROM links WHERE slug = $1 RETURNING slug', [slug]);
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: 'Link dengan slug tersebut tidak ditemukan.' });
+        }
+
+        res.json({ message: `Link dengan slug '${slug}' berhasil dihapus.` });
+    } catch (error) {
+        console.error('Error menghapus link:', error);
+        res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+    }
+});
+
+// === ROUTE PENGALIHAN URL (diletakkan paling akhir) ===
 app.get('/:slug', async (req, res) => {
     try {
         const { slug } = req.params;
@@ -270,5 +300,6 @@ app.get('/:slug', async (req, res) => {
         res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
     }
 });
+
 
 app.listen(PORT, () => console.log(`Server berjalan di port ${PORT}`));

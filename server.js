@@ -1,19 +1,24 @@
 // =================================================================
-// ==      FILE FINAL: server.js (dengan Perbaikan URL Shortener)     ==
+// ==      FILE FINAL: server.js (dengan PostgreSQL)      ==
 // =================================================================
 
 const express = require('express'); 
 const cors = require('cors'); 
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { Pool } = require('pg');
+const { Pool } = require('pg'); // <-- Menggunakan library 'pg'
 
+// === KONFIGURASI DATABASE ===
+// Menghubungkan ke database PostgreSQL menggunakan URL dari Environment Variable
+// Saat di Render, process.env.DATABASE_URL akan terisi otomatis.
+// Untuk testing lokal, kita akan mengaturnya nanti.
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
+    // Baris ini penting saat deploy di Render
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
-const JWT_SECRET = process.env.JWT_SECRET || 'ini-adalah-kunci-rahasia-yang-sangat-aman-dan-panjang';
+const JWT_SECRET = 'ini-adalah-kunci-rahasia-yang-sangat-aman-dan-panjang';
 
 function generateSlug() { return Math.random().toString(36).substring(2, 8); }
 
@@ -30,14 +35,13 @@ function authenticateToken(req, res, next) {
 }
 
 const app = express();
+// Render akan mengatur PORT secara dinamis
 const PORT = process.env.PORT || 3000;
 
-app.use(cors({
-    origin: 'https://portof.netlify.app' // Pastikan ini URL frontend Anda
-}));
+app.use(cors());
 app.use(express.json());
 
-// === ROUTES ===
+// === ROUTES (Sudah diadaptasi untuk PostgreSQL) ===
 
 app.get('/', (req, res) => res.send('Halo dari Backend Server Node.js! Terhubung ke PostgreSQL.'));
 
@@ -47,12 +51,15 @@ app.post('/api/register', async (req, res) => {
         if (!email || !password || password.length < 6) return res.status(400).json({ error: 'Input tidak valid.' });
         
         const passwordHash = await bcrypt.hash(password, 10);
+        // Sintaks SQL untuk PostgreSQL menggunakan $1, $2, dst. sebagai placeholder
         const newUser = await pool.query(
             'INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id, email',
             [email, passwordHash]
         );
+        // Hasil dari 'pg' ada di dalam property 'rows'
         res.status(201).json({ message: 'Pengguna berhasil dibuat!', user: newUser.rows[0] });
     } catch (error) {
+        // Kode error untuk duplikat di PostgreSQL adalah '23505'
         if (error.code === '23505') return res.status(409).json({ error: 'Email sudah terdaftar.' });
         console.error(error);
         res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
@@ -107,41 +114,12 @@ app.get('/api/moods', authenticateToken, async (req, res) => {
     }
 });
 
-// +++ KODE BARU YANG DITAMBAHKAN +++
-app.post('/api/shorten', async (req, res) => {
-    try {
-        const { original_url } = req.body;
-        if (!original_url) {
-            return res.status(400).json({ error: 'URL asli dibutuhkan' });
-        }
-        
-        const slug = generateSlug(); // Menggunakan fungsi yang sudah ada di file Anda
-        
-        const newLink = await pool.query(
-            'INSERT INTO links (original_url, slug) VALUES ($1, $2) RETURNING slug',
-            [original_url, slug]
-        );
-        
-        // Membuat URL lengkap berdasarkan host dari request
-        const shortUrl = `${req.protocol}://${req.get('host')}/${newLink.rows[0].slug}`;
-        
-        res.status(201).json({ short_url: shortUrl });
-
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Terjadi kesalahan pada server saat membuat link.' });
-    }
-});
-// +++ AKHIR DARI KODE BARU +++
-
-
 app.get('/:slug', async (req, res) => {
     try {
         const { slug } = req.params;
         const result = await pool.query('SELECT original_url FROM links WHERE slug = $1', [slug]);
         const link = result.rows[0];
         if (link) {
-            // Lakukan redirect ke URL asli
             res.redirect(301, link.original_url);
         } else {
             res.status(404).send('Link tidak ditemukan.');

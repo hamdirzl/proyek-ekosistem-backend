@@ -1,5 +1,5 @@
 // =================================================================
-// ==      FILE FINAL: server.js (dengan Custom Domain)     ==
+// ==      FILE FINAL: server.js (dengan Login Monitoring)    ==
 // =================================================================
 
 const express = require('express');
@@ -75,13 +75,32 @@ app.post('/api/login', async (req, res) => {
         const isPasswordCorrect = await bcrypt.compare(password, user.password_hash);
         if (!isPasswordCorrect) return res.status(401).json({ error: 'Email atau password salah.' });
 
+        // [LOGIKA MONITORING DIMULAI DI SINI]
+
+        // 1. Catat ke Log Server
+        const ipAddress = req.ip; 
+        console.log(`Login Berhasil: Pengguna '${user.email}' (ID: ${user.id}) masuk dari IP: ${ipAddress}`);
+        
+        // 2. Simpan ke Database
+        const userAgent = req.headers['user-agent'];
+        // Query ini dijalankan di latar belakang tanpa 'await'
+        pool.query(
+            'INSERT INTO login_activity (user_id, ip_address, user_agent) VALUES ($1, $2, $3)',
+            [user.id, ipAddress, userAgent]
+        ).catch(err => console.error('Gagal mencatat aktivitas login ke DB:', err)); 
+        
+        // [LOGIKA MONITORING SELESAI]
+
+        // Buat dan kirim token seperti biasa
         const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '1h' });
         res.json({ message: 'Login berhasil!', token });
+
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
     }
 });
+
 
 app.get('/api/profile', authenticateToken, (req, res) => res.json({ user: req.user }));
 
@@ -129,8 +148,6 @@ app.post('/api/shorten', async (req, res) => {
             [original_url, slug]
         );
 
-        // [PERUBAHAN DI SINI] Menggunakan BASE_URL dari environment variable yang sudah Anda atur di Render.
-        // Ini memastikan link yang dibuat selalu menggunakan domain kustom Anda.
         const baseUrl = process.env.BASE_URL || `https://${req.get('host')}`;
         const fullShortUrl = `${baseUrl}/${newLink.rows[0].slug}`;
 

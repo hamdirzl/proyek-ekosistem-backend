@@ -2,9 +2,9 @@
 // ==      FILE FINAL: server.js (dengan PostgreSQL)      ==
 // =================================================================
 
-const express = require('express'); 
-const cors = require('cors'); 
-const bcrypt = require('bcrypt');
+const express = require('express');
+const cors = require('cors');
+const bcrypt = 'bcrypt';
 const jwt = require('jsonwebtoken');
 const { Pool } = require('pg'); // <-- Menggunakan library 'pg'
 
@@ -49,7 +49,7 @@ app.post('/api/register', async (req, res) => {
     try {
         const { email, password } = req.body;
         if (!email || !password || password.length < 6) return res.status(400).json({ error: 'Input tidak valid.' });
-        
+
         const passwordHash = await bcrypt.hash(password, 10);
         // Sintaks SQL untuk PostgreSQL menggunakan $1, $2, dst. sebagai placeholder
         const newUser = await pool.query(
@@ -111,6 +111,36 @@ app.get('/api/moods', authenticateToken, async (req, res) => {
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+    }
+});
+
+// ============== KODE BARU UNTUK MEMBUAT LINK PENDEK ==============
+app.post('/api/shorten', async (req, res) => {
+    try {
+        const { original_url } = req.body;
+
+        // Validasi sederhana untuk memastikan URL dikirim dan valid
+        if (!original_url || !(original_url.startsWith('http://') || original_url.startsWith('https://'))) {
+            return res.status(400).json({ error: 'URL tidak valid. Harus diawali dengan http:// atau https://' });
+        }
+
+        const slug = generateSlug(); // Menggunakan fungsi yang sudah ada
+
+        // Menyimpan URL asli dan slug baru ke database
+        const newLink = await pool.query(
+            'INSERT INTO links (original_url, slug) VALUES ($1, $2) RETURNING slug',
+            [original_url, slug]
+        );
+
+        // Membuat URL pendek yang lengkap untuk dikembalikan ke frontend
+        // Contoh: https://server-pribadi-hamdi.onrender.com/abcdef
+        const fullShortUrl = `${req.protocol}://${req.get('host')}/${newLink.rows[0].slug}`;
+
+        res.status(201).json({ short_url: fullShortUrl });
+
+    } catch (error) {
+        console.error("Error saat membuat link pendek:", error);
+        res.status(500).json({ error: 'Gagal membuat link pendek di server.' });
     }
 });
 

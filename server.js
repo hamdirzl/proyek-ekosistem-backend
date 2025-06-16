@@ -1,160 +1,133 @@
 // =================================================================
-// ==      FILE FINAL: server.js (Backend Lengkap & Fungsional)   ==
+// ==      FILE FINAL: server.js (dengan PostgreSQL)      ==
 // =================================================================
 
-// === IMPOR LIBRARY ===
 const express = require('express'); 
 const cors = require('cors'); 
-const setupDatabase = require('./database.js');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const { Pool } = require('pg'); // <-- Menggunakan library 'pg'
 
-// === KONSTANTA & KUNCI RAHASIA ===
+// === KONFIGURASI DATABASE ===
+// Menghubungkan ke database PostgreSQL menggunakan URL dari Environment Variable
+// Saat di Render, process.env.DATABASE_URL akan terisi otomatis.
+// Untuk testing lokal, kita akan mengaturnya nanti.
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    // Baris ini penting saat deploy di Render
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
+
 const JWT_SECRET = 'ini-adalah-kunci-rahasia-yang-sangat-aman-dan-panjang';
 
-// === FUNGSI HELPER ===
-function generateSlug() {
-    return Math.random().toString(36).substring(2, 8);
-}
+function generateSlug() { return Math.random().toString(36).substring(2, 8); }
 
-// === MIDDLEWARE - SANG PENJAGA PINTU ===
 function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1]; // Format: Bearer TOKEN
-
-    if (token == null) return res.sendStatus(401); // Unauthorized (Tidak ada token)
+    const token = authHeader && authHeader.split(' ')[1];
+    if (token == null) return res.sendStatus(401);
 
     jwt.verify(token, JWT_SECRET, (err, user) => {
-        if (err) return res.sendStatus(403); // Forbidden (Token tidak valid/kedaluwarsa)
+        if (err) return res.sendStatus(403);
+        req.user = user;
+        next();
+    });
+}
+
+const app = express();
+// Render akan mengatur PORT secara dinamis
+const PORT = process.env.PORT || 3000;
+
+app.use(cors());
+app.use(express.json());
+
+// === ROUTES (Sudah diadaptasi untuk PostgreSQL) ===
+
+app.get('/', (req, res) => res.send('Halo dari Backend Server Node.js! Terhubung ke PostgreSQL.'));
+
+app.post('/api/register', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        if (!email || !password || password.length < 6) return res.status(400).json({ error: 'Input tidak valid.' });
         
-        req.user = user; // Simpan payload pengguna ke object request
-        next(); // Lanjutkan ke rute tujuan
-    });
-}
+        const passwordHash = await bcrypt.hash(password, 10);
+        // Sintaks SQL untuk PostgreSQL menggunakan $1, $2, dst. sebagai placeholder
+        const newUser = await pool.query(
+            'INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id, email',
+            [email, passwordHash]
+        );
+        // Hasil dari 'pg' ada di dalam property 'rows'
+        res.status(201).json({ message: 'Pengguna berhasil dibuat!', user: newUser.rows[0] });
+    } catch (error) {
+        // Kode error untuk duplikat di PostgreSQL adalah '23505'
+        if (error.code === '23505') return res.status(409).json({ error: 'Email sudah terdaftar.' });
+        console.error(error);
+        res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+    }
+});
 
-// === FUNGSI UTAMA (MAIN) ===
-async function main() {
-    const app = express();
-    const PORT = 3000;
-    const db = await setupDatabase();
+app.post('/api/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+        const user = result.rows[0];
+        if (!user) return res.status(401).json({ error: 'Email atau password salah.' });
 
-    // === MIDDLEWARE Global ===
-    app.use(cors());
-    app.use(express.json());
+        const isPasswordCorrect = await bcrypt.compare(password, user.password_hash);
+        if (!isPasswordCorrect) return res.status(401).json({ error: 'Email atau password salah.' });
 
-    // === ROUTES (ATURAN LALU LINTAS API) ===
+        const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '1h' });
+        res.json({ message: 'Login berhasil!', token });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+    }
+});
 
-    // --- Rute Publik ---
-    app.get('/', (req, res) => {
-        res.send('Halo dari Backend Server Node.js! Server ini aktif dan berjalan.');
-    });
+app.get('/api/profile', authenticateToken, (req, res) => res.json({ user: req.user }));
 
-    app.post('/api/shorten', async (req, res) => {
-        try {
-            const { original_url } = req.body; 
-            if (!original_url) return res.status(400).json({ error: 'URL tidak boleh kosong' });
-            
-            const slug = generateSlug();
-            await db.run('INSERT INTO links (slug, original_url) VALUES (?, ?)', [slug, original_url]);
-            const shortUrl = `http://localhost:${PORT}/${slug}`;
-            res.status(201).json({ short_url: shortUrl });
-        } catch (error) {
-            console.error('Gagal membuat link pendek:', error);
-            res.status(500).json({ error: 'Terjadi kesalahan pada server' });
+app.post('/api/moods', authenticateToken, async (req, res) => {
+    try {
+        const { mood_level, notes } = req.body;
+        const user_id = req.user.id;
+        if (mood_level == null || mood_level < 1 || mood_level > 5) return res.status(400).json({ error: 'Input mood tidak valid' });
+
+        const newMood = await pool.query(
+            'INSERT INTO moods (user_id, mood_level, notes) VALUES ($1, $2, $3) RETURNING *',
+            [user_id, mood_level, notes]
+        );
+        res.status(201).json(newMood.rows[0]);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+    }
+});
+
+app.get('/api/moods', authenticateToken, async (req, res) => {
+    try {
+        const user_id = req.user.id;
+        const result = await pool.query('SELECT * FROM moods WHERE user_id = $1 ORDER BY created_at DESC', [user_id]);
+        res.json(result.rows);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+    }
+});
+
+app.get('/:slug', async (req, res) => {
+    try {
+        const { slug } = req.params;
+        const result = await pool.query('SELECT original_url FROM links WHERE slug = $1', [slug]);
+        const link = result.rows[0];
+        if (link) {
+            res.redirect(301, link.original_url);
+        } else {
+            res.status(404).send('Link tidak ditemukan.');
         }
-    });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+    }
+});
 
-    // --- Rute Autentikasi ---
-    app.post('/api/register', async (req, res) => {
-        try {
-            const { email, password } = req.body;
-            if (!email || !password) return res.status(400).json({ error: 'Email dan password tidak boleh kosong.' });
-            if (password.length < 6) return res.status(400).json({ error: 'Password minimal harus 6 karakter.' });
-
-            const passwordHash = await bcrypt.hash(password, 10);
-            await db.run('INSERT INTO users (email, password_hash) VALUES (?, ?)', [email, passwordHash]);
-            res.status(201).json({ message: 'Pengguna berhasil dibuat!' });
-        } catch (error) {
-            if (error.code === 'SQLITE_CONSTRAINT') return res.status(409).json({ error: 'Email sudah terdaftar.' });
-            console.error('Gagal registrasi:', error);
-            res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
-        }
-    });
-
-    app.post('/api/login', async (req, res) => {
-        try {
-            const { email, password } = req.body;
-            if (!email || !password) return res.status(400).json({ error: 'Email dan password tidak boleh kosong.' });
-
-            const user = await db.get('SELECT * FROM users WHERE email = ?', [email]);
-            if (!user) return res.status(401).json({ error: 'Email atau password salah.' });
-
-            const isPasswordCorrect = await bcrypt.compare(password, user.password_hash);
-            if (!isPasswordCorrect) return res.status(401).json({ error: 'Email atau password salah.' });
-
-            const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '1h' });
-            res.json({ message: 'Login berhasil!', token: token });
-        } catch (error) {
-            console.error('Gagal login:', error);
-            res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
-        }
-    });
-
-    // --- Rute Terproteksi (Hanya untuk yang sudah login) ---
-    app.get('/api/profile', authenticateToken, (req, res) => {
-        res.json({ message: 'Selamat datang di halaman profil!', user: req.user });
-    });
-
-    app.post('/api/moods', authenticateToken, async (req, res) => {
-        try {
-            const { mood_level, notes } = req.body;
-            const user_id = req.user.id;
-            if (!mood_level || typeof mood_level !== 'number' || mood_level < 1 || mood_level > 5) {
-                return res.status(400).json({ error: 'mood_level harus berupa angka antara 1 dan 5.' });
-            }
-            const result = await db.run('INSERT INTO moods (user_id, mood_level, notes) VALUES (?, ?, ?)', [user_id, mood_level, notes]);
-            res.status(201).json({ id: result.lastID, user_id, mood_level, notes });
-        } catch (error) {
-            console.error('Gagal menyimpan mood:', error);
-            res.status(500).json({ error: 'Terjadi kesalahan pada server' });
-        }
-    });
-
-    app.get('/api/moods', authenticateToken, async (req, res) => {
-        try {
-            const user_id = req.user.id;
-            const moods = await db.all('SELECT id, mood_level, notes, created_at FROM moods WHERE user_id = ? ORDER BY created_at DESC', [user_id]);
-            res.json(moods);
-        } catch (error) {
-            console.error('Gagal mengambil data mood:', error);
-            res.status(500).json({ error: 'Terjadi kesalahan pada server' });
-        }
-    });
-
-    // --- Rute Redirect (diletakkan paling akhir) ---
-    app.get('/:slug', async (req, res) => {
-        try {
-            const slug = req.params.slug;
-            if (slug === 'favicon.ico') return res.status(204).send();
-            
-            const link = await db.get('SELECT original_url FROM links WHERE slug = ?', [slug]);
-            if (link) {
-                console.log(`Redirecting ${slug} to ${link.original_url}`);
-                res.redirect(301, link.original_url);
-            } else {
-                res.status(404).send('Link tidak ditemukan atau sudah tidak valid.');
-            }
-        } catch (error) {
-            console.error('Gagal melakukan redirect:', error);
-            res.status(500).send('Terjadi kesalahan pada server');
-        }
-    });
-
-    // === MENJALANKAN SERVER ===
-    app.listen(PORT, () => {
-        console.log(`Server berjalan di http://localhost:${PORT}`);
-    });
-}
-
-// Panggil fungsi utama untuk menjalankan seluruh proses
-main();
+app.listen(PORT, () => console.log(`Server berjalan di port ${PORT}`));

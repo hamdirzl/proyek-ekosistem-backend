@@ -40,6 +40,7 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors({
   origin: [
+    'https://hamdirzl.my.id', 
     'https://www.hamdirzl.my.id', 
     'https://hrportof.netlify.app' // Alamat lama Anda di Netlify
   ] 

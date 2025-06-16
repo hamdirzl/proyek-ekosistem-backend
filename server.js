@@ -1,5 +1,5 @@
 // =================================================================
-// ==      FILE FINAL: server.js (dengan Login Monitoring)    ==
+// ==      FILE FINAL: server.js (dengan Perbaikan IP Log)    ==
 // =================================================================
 
 const express = require('express');
@@ -32,6 +32,10 @@ function authenticateToken(req, res, next) {
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// [PERBAIKAN] Memberitahu Express untuk percaya pada proxy Render agar bisa mendapat IP asli pengguna
+// Letakkan ini sebelum app.use(cors())
+app.set('trust proxy', true);
 
 app.use(cors({
   origin: [
@@ -76,22 +80,16 @@ app.post('/api/login', async (req, res) => {
         if (!isPasswordCorrect) return res.status(401).json({ error: 'Email atau password salah.' });
 
         // [LOGIKA MONITORING DIMULAI DI SINI]
-
-        // 1. Catat ke Log Server
         const ipAddress = req.ip; 
         console.log(`Login Berhasil: Pengguna '${user.email}' (ID: ${user.id}) masuk dari IP: ${ipAddress}`);
         
-        // 2. Simpan ke Database
         const userAgent = req.headers['user-agent'];
-        // Query ini dijalankan di latar belakang tanpa 'await'
         pool.query(
             'INSERT INTO login_activity (user_id, ip_address, user_agent) VALUES ($1, $2, $3)',
             [user.id, ipAddress, userAgent]
         ).catch(err => console.error('Gagal mencatat aktivitas login ke DB:', err)); 
-        
         // [LOGIKA MONITORING SELESAI]
 
-        // Buat dan kirim token seperti biasa
         const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '1h' });
         res.json({ message: 'Login berhasil!', token });
 

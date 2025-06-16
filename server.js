@@ -38,7 +38,13 @@ const app = express();
 // Render akan mengatur PORT secara dinamis
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+app.use(cors({
+  origin: [
+    'https://www.hamdirzl.my.id', 
+    'https://hrportof.netlify.app' // Alamat lama Anda di Netlify
+  ] 
+}));
+
 app.use(express.json());
 
 // === ROUTES (Sudah diadaptasi untuk PostgreSQL) ===

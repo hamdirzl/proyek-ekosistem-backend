@@ -1,5 +1,5 @@
 // =================================================================
-// == FILE FINAL: server.js (Update: Fitur Riwayat Link)       ==
+// == FILE FINAL: server.js (Update: Fitur Media Converter)      ==
 // =================================================================
 
 const express = require('express');
@@ -9,6 +9,11 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const { Pool } = require('pg');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs').promises;
+const { convert } = require('libreoffice-convert');
+
 
 // === KONFIGURASI DATABASE ===
 const pool = new Pool({
@@ -63,10 +68,18 @@ app.use(cors({
     'https://hamdirzl.my.id', 
     'https://www.hamdirzl.my.id', 
     'https://hrportof.netlify.app'
-  ] 
+  ],
+  exposedHeaders: ['Content-Disposition'] // Expose header untuk nama file
 }));
 
 app.use(express.json());
+
+// Konfigurasi Multer untuk menangani unggahan file
+// Menyimpan file sementara di folder 'uploads'
+const upload = multer({ dest: 'uploads/' });
+// Pastikan folder uploads ada
+fs.mkdir('uploads', { recursive: true }).catch(console.error);
+
 
 // === ROUTES ===
 
@@ -246,6 +259,48 @@ app.get('/api/user/links', authenticateToken, async (req, res) => {
     } catch (error) {
         console.error('Error mengambil riwayat link pengguna:', error);
         res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+    }
+});
+
+// === ROUTES MEDIA CONVERTER ===
+app.post('/api/convert', authenticateToken, upload.single('file'), async (req, res) => {
+    if (!req.file) {
+        return res.status(400).json({ error: 'Tidak ada file yang diunggah.' });
+    }
+
+    const { outputFormat } = req.body;
+    if (!outputFormat) {
+        await fs.unlink(req.file.path);
+        return res.status(400).json({ error: 'Format output tidak dipilih.' });
+    }
+
+    const inputPath = req.file.path;
+    const outputPath = path.join(__dirname, 'uploads', `${Date.now()}.${outputFormat}`);
+
+    try {
+        console.log(`Mencoba konversi: ${req.file.originalname} ke .${outputFormat}`);
+        const fileBuffer = await fs.readFile(inputPath);
+
+        let outputBuffer = await new Promise((resolve, reject) => {
+            convert(fileBuffer, `.${outputFormat}`, undefined, (err, result) => {
+                if (err) return reject(err);
+                resolve(result);
+            });
+        });
+        
+        await fs.writeFile(outputPath, outputBuffer);
+
+        res.download(outputPath, `converted-file.${outputFormat}`, async (err) => {
+            if (err) console.error("Error saat mengirim file:", err);
+            await fs.unlink(inputPath);
+            await fs.unlink(outputPath);
+            console.log("File sementara berhasil dihapus.");
+        });
+
+    } catch (error) {
+        console.error('Error saat konversi file:', error);
+        await fs.unlink(inputPath).catch(err => console.error("Gagal hapus input file saat error:", err));
+        res.status(500).json({ error: 'Gagal mengonversi file.' });
     }
 });
 

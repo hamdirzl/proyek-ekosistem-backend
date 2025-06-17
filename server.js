@@ -1,5 +1,5 @@
 // =================================================================
-// == FILE FINAL SERVER.JS (TERMASUK FITUR REMOVE BG & LOGGING)  ==
+// ==         FILE FINAL SERVER.JS (FIX: REMOVE.BG PREVIEW)       ==
 // =================================================================
 
 require('dotenv').config();
@@ -90,46 +90,49 @@ fs.mkdir('uploads', { recursive: true }).catch(console.error);
 app.get('/', (req, res) => res.send('Halo dari Backend Server Node.js! Terhubung ke PostgreSQL.'));
 
 // ... (route register, login, forgot/reset password tetap sama) ...
-// GANTI ROUTE LAMA ANDA DENGAN VERSI FINAL INI
-app.post('/api/tools/remove-background', authenticateToken, upload.single('imageFile'), async (req, res) => {
-    console.log('Endpoint /api/tools/remove-background diakses.');
-
-    if (!req.file) {
-        return res.status(400).json({ error: 'Tidak ada file gambar yang diunggah.' });
-    }
-    if (!REMOVE_BG_API_KEY) {
-        console.error('FATAL: REMOVE_BG_API_KEY tidak ditemukan di environment variables.');
-        return res.status(500).json({ error: 'Kunci API untuk layanan remove background belum dikonfigurasi di server.' });
-    }
-
-    const form = new FormData();
-    form.append('image_file', req.file.buffer, req.file.originalname);
-    // PERUBAHAN PENTING DI SINI: Meminta 'preview' untuk menggunakan jatah gratis
-    form.append('size', 'preview'); 
-
-    console.log("Meminta 'preview' dari remove.bg menggunakan free credits...");
-
+app.post('/api/register', async (req, res) => {
     try {
-        const response = await axios({
-            method: 'post',
-            url: 'https://api.remove.bg/v1/removebg',
-            data: form,
-            responseType: 'arraybuffer',
-            headers: {
-                ...form.getHeaders(),
-                'X-Api-Key': REMOVE_BG_API_KEY,
-            },
-        });
+        const { email, password } = req.body;
+        if (!email || !password || password.length < 6) return res.status(400).json({ error: 'Input tidak valid.' });
+
+        const passwordHash = await bcrypt.hash(password, 10);
+        const newUser = await pool.query(
+            'INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id, email',
+            [email, passwordHash]
+        );
+        res.status(201).json({ message: 'Pengguna berhasil dibuat!', user: newUser.rows[0] });
+    } catch (error) {
+        if (error.code === '23505') return res.status(409).json({ error: 'Email sudah terdaftar.' });
+        console.error(error);
+        res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+    }
+});
+
+app.post('/api/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+        const user = result.rows[0];
+        if (!user) return res.status(401).json({ error: 'Email atau password salah.' });
+
+        const isPasswordCorrect = await bcrypt.compare(password, user.password_hash);
+        if (!isPasswordCorrect) return res.status(401).json({ error: 'Email atau password salah.' });
+
+        const ipAddress = req.ip; 
+        console.log(`Login Berhasil: Pengguna '${user.email}' (ID: ${user.id}, Role: ${user.role}) masuk dari IP: ${ipAddress}`);
         
-        console.log('Berhasil! Menerima respons gambar preview dari remove.bg');
-        res.setHeader('Content-Type', 'image/png');
-        res.setHeader('Content-Disposition', 'attachment; filename="no-bg-preview.png"');
-        res.send(response.data);
+        const userAgent = req.headers['user-agent'];
+        pool.query(
+            'INSERT INTO login_activity (user_id, ip_address, user_agent) VALUES ($1, $2, $3)',
+            [user.id, ipAddress, userAgent]
+        ).catch(err => console.error('Gagal mencatat aktivitas login ke DB:', err)); 
+        
+        const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '1h' });
+        res.json({ message: 'Login berhasil!', token });
 
     } catch (error) {
-        const errorDetails = error.response ? error.response.data.toString() : error.message;
-        console.error('Error dari API remove.bg:', errorDetails);
-        res.status(502).json({ error: 'Gagal menghapus background. Layanan eksternal mungkin sedang bermasalah atau terjadi kesalahan.' });
+        console.error(error);
+        res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
     }
 });
 
@@ -328,12 +331,9 @@ app.post('/api/convert/images-to-pdf', authenticateToken, diskUpload.array('file
     }
 });
 
-// ROUTE BARU: REMOVE BACKGROUND (DENGAN LOGGING DETAIL)
+// ROUTE FINAL: REMOVE BACKGROUND (MENGGUNAKAN FREE PREVIEW)
 app.post('/api/tools/remove-background', authenticateToken, upload.single('imageFile'), async (req, res) => {
-    console.log('Endpoint /api/tools/remove-background diakses.');
-
     if (!req.file) {
-        console.error('Tidak ada file yang diunggah.');
         return res.status(400).json({ error: 'Tidak ada file gambar yang diunggah.' });
     }
     if (!REMOVE_BG_API_KEY) {
@@ -343,16 +343,7 @@ app.post('/api/tools/remove-background', authenticateToken, upload.single('image
 
     const form = new FormData();
     form.append('image_file', req.file.buffer, req.file.originalname);
-    form.append('size', 'auto');
-
-    // --- LOG DETAIL SEBELUM MENGIRIM PERMINTAAN ---
-    console.log('--- Data yang akan dikirim ke remove.bg ---');
-    console.log('URL Target:', 'https://api.remove.bg/v1/removebg');
-    console.log('API Key Digunakan:', `***${REMOVE_BG_API_KEY.slice(-4)}`); // Hanya menampilkan 4 digit terakhir demi keamanan
-    console.log('Nama File:', req.file.originalname);
-    console.log('Ukuran File (bytes):', req.file.size);
-    console.log('-------------------------------------------');
-
+    form.append('size', 'preview'); // Ini adalah perbaikan final untuk menggunakan jatah gratis
 
     try {
         const response = await axios({
@@ -368,11 +359,10 @@ app.post('/api/tools/remove-background', authenticateToken, upload.single('image
         
         console.log('Berhasil menerima respons dari remove.bg');
         res.setHeader('Content-Type', 'image/png');
-        res.setHeader('Content-Disposition', 'attachment; filename="no-bg.png"');
+        res.setHeader('Content-Disposition', 'attachment; filename="no-bg-preview.png"');
         res.send(response.data);
 
     } catch (error) {
-        // Ini akan menangkap error 404
         const errorDetails = error.response ? error.response.data.toString() : error.message;
         console.error('Error dari API remove.bg:', errorDetails);
         res.status(502).json({ error: 'Gagal menghapus background. Layanan eksternal mungkin sedang bermasalah atau terjadi kesalahan.' });

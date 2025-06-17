@@ -1,5 +1,5 @@
 // =================================================================
-// ==         FILE FINAL SERVER.JS (FIX: REMOVE.BG PREVIEW)       ==
+// ==      FILE FINAL SERVER.JS (IMPLEMENTASI CLIPDROP API)       ==
 // =================================================================
 
 require('dotenv').config();
@@ -24,8 +24,8 @@ const pool = new Pool({
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
-const JWT_SECRET = process.env.JWT_SECRET || 'ini-adalah-kunci-rahasia-yang-sangat-aman-dan-panjang';
-const REMOVE_BG_API_KEY = process.env.REMOVE_BG_API_KEY;
+const JWT_SECRET = process.env.JWT_SECRET;
+const CLIPDROP_API_KEY = process.env.CLIPDROP_API_KEY; // Menggunakan kunci API ClipDrop
 
 function generateSlug() { return Math.random().toString(36).substring(2, 8); }
 
@@ -77,7 +77,6 @@ app.use(cors({
 
 app.use(express.json());
 
-// Menggunakan memoryStorage untuk background remover agar tidak menyimpan file sementara di server
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
@@ -89,7 +88,7 @@ fs.mkdir('uploads', { recursive: true }).catch(console.error);
 
 app.get('/', (req, res) => res.send('Halo dari Backend Server Node.js! Terhubung ke PostgreSQL.'));
 
-// ... (route register, login, forgot/reset password tetap sama) ...
+// ... (semua route lain tetap sama) ...
 app.post('/api/register', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -204,8 +203,6 @@ app.post('/api/reset-password', async (req, res) => {
     }
 });
 
-
-// === ROUTES URL SHORTENER ===
 app.post('/api/shorten', authenticateToken, async (req, res) => {
     try {
         const { original_url, custom_slug } = req.body;
@@ -264,9 +261,6 @@ app.get('/api/user/links', authenticateToken, async (req, res) => {
         res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
     }
 });
-
-
-// === ROUTES TOOLS & CONVERTER ===
 
 app.post('/api/convert', authenticateToken, diskUpload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'Tidak ada file yang diunggah.' });
@@ -331,40 +325,38 @@ app.post('/api/convert/images-to-pdf', authenticateToken, diskUpload.array('file
     }
 });
 
-// ROUTE FINAL: REMOVE BACKGROUND (MENGGUNAKAN FREE PREVIEW)
+// ROUTE FINAL: REMOVE BACKGROUND (MENGGUNAKAN CLIPDROP API)
 app.post('/api/tools/remove-background', authenticateToken, upload.single('imageFile'), async (req, res) => {
     if (!req.file) {
         return res.status(400).json({ error: 'Tidak ada file gambar yang diunggah.' });
     }
-    if (!REMOVE_BG_API_KEY) {
-        console.error('FATAL: REMOVE_BG_API_KEY tidak ditemukan di environment variables.');
+    if (!CLIPDROP_API_KEY) {
+        console.error('FATAL: CLIPDROP_API_KEY tidak ditemukan di environment variables.');
         return res.status(500).json({ error: 'Kunci API untuk layanan remove background belum dikonfigurasi di server.' });
     }
 
     const form = new FormData();
     form.append('image_file', req.file.buffer, req.file.originalname);
-    form.append('size', 'preview'); // Ini adalah perbaikan final untuk menggunakan jatah gratis
 
     try {
         const response = await axios({
             method: 'post',
-            url: 'https://api.remove.bg/v1/removebg',
+            url: 'https://api.clipdrop.co/v1/remove-background',
             data: form,
             responseType: 'arraybuffer',
             headers: {
                 ...form.getHeaders(),
-                'X-Api-Key': REMOVE_BG_API_KEY,
+                'x-api-key': CLIPDROP_API_KEY, // Header untuk ClipDrop
             },
         });
         
-        console.log('Berhasil menerima respons dari remove.bg');
         res.setHeader('Content-Type', 'image/png');
-        res.setHeader('Content-Disposition', 'attachment; filename="no-bg-preview.png"');
+        res.setHeader('Content-Disposition', 'attachment; filename="no-bg-clipdrop.png"');
         res.send(response.data);
 
     } catch (error) {
         const errorDetails = error.response ? error.response.data.toString() : error.message;
-        console.error('Error dari API remove.bg:', errorDetails);
+        console.error('Error dari API ClipDrop:', errorDetails);
         res.status(502).json({ error: 'Gagal menghapus background. Layanan eksternal mungkin sedang bermasalah atau terjadi kesalahan.' });
     }
 });
@@ -405,7 +397,6 @@ app.get('/:slug', async (req, res) => {
         if (link) {
             res.redirect(301, link.original_url);
         } else {
-            // Arahkan ke halaman utama jika slug tidak ditemukan
             res.redirect(302, 'https://hamdirzl.my.id');
         }
     } catch (error) {

@@ -1,5 +1,5 @@
 // =================================================================
-// == FILE FINAL: server.js (dengan Fitur Admin & Hapus Link)    ==
+// == FILE FINAL: server.js (Tanpa Fitur Mood Tracker)           ==
 // =================================================================
 
 const express = require('express');
@@ -187,33 +187,7 @@ app.post('/api/reset-password', async (req, res) => {
 
 app.get('/api/profile', authenticateToken, (req, res) => res.json({ user: req.user }));
 
-app.post('/api/moods', authenticateToken, async (req, res) => {
-    try {
-        const { mood_level, notes } = req.body;
-        const user_id = req.user.id;
-        if (mood_level == null || mood_level < 1 || mood_level > 5) return res.status(400).json({ error: 'Input mood tidak valid' });
-
-        const newMood = await pool.query(
-            'INSERT INTO moods (user_id, mood_level, notes) VALUES ($1, $2, $3) RETURNING *',
-            [user_id, mood_level, notes]
-        );
-        res.status(201).json(newMood.rows[0]);
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
-    }
-});
-
-app.get('/api/moods', authenticateToken, async (req, res) => {
-    try {
-        const user_id = req.user.id;
-        const result = await pool.query('SELECT * FROM moods WHERE user_id = $1 ORDER BY created_at DESC', [user_id]);
-        res.json(result.rows);
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
-    }
-});
+// Endpoint Mood Tracker (GET & POST) telah dihapus dari sini.
 
 // === ROUTES URL SHORTENER ===
 app.post('/api/shorten', async (req, res) => {

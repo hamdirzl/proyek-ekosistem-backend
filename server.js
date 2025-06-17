@@ -190,11 +190,10 @@ app.get('/api/profile', authenticateToken, (req, res) => res.json({ user: req.us
 
 // === ROUTES URL SHORTENER ===
 
-// PERUBAHAN: Endpoint ini sekarang dilindungi, hanya untuk user yang login
 app.post('/api/shorten', authenticateToken, async (req, res) => {
     try {
         const { original_url, custom_slug } = req.body;
-        const userId = req.user.id; // PERUBAHAN: Ambil ID user dari token
+        const userId = req.user.id; 
 
         if (!original_url || !(original_url.startsWith('http://') || original_url.startsWith('https://'))) {
             return res.status(400).json({ error: 'URL tidak valid. Harus diawali dengan http:// atau https://' });
@@ -217,7 +216,6 @@ app.post('/api/shorten', authenticateToken, async (req, res) => {
             slug = generateSlug();
         }
         
-        // PERUBAHAN: Simpan juga user_id saat membuat link baru
         const newLink = await pool.query(
             'INSERT INTO links (original_url, slug, user_id) VALUES ($1, $2, $3) RETURNING slug, original_url, created_at',
             [original_url, slug, userId]
@@ -228,7 +226,7 @@ app.post('/api/shorten', authenticateToken, async (req, res) => {
 
         res.status(201).json({ 
             short_url: fullShortUrl,
-            link_data: newLink.rows[0] // Kirim data link lengkap untuk ditambahkan ke riwayat
+            link_data: newLink.rows[0] 
         });
 
     } catch (error) {
@@ -237,7 +235,6 @@ app.post('/api/shorten', authenticateToken, async (req, res) => {
     }
 });
 
-// ENDPOINT BARU: Untuk mengambil riwayat link milik pengguna
 app.get('/api/user/links', authenticateToken, async (req, res) => {
     try {
         const userId = req.user.id;

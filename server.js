@@ -1,6 +1,12 @@
 // =================================================================
 // ==      FILE FINAL SERVER.JS (IMPLEMENTASI CLIPDROP API)       ==
 // =================================================================
+console.log("== SERVER VERSI CLIPDROP - SIAP DIGUNAKAN ==");
+
+// Baris di bawah ini adalah kode Anda yang sudah ada
+require('dotenv').config();
+const express = require('express');
+// ... sisa kode Anda
 
 require('dotenv').config();
 const express = require('express');

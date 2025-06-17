@@ -1,4 +1,6 @@
 // == SERVER VERSI CLIPDROP - SIAP DIGUNAKAN ==
+
+console.log("== SERVER VERSI CLIPDROP - SIAP DIGUNAKAN ==");
 require('dotenv').config();
 
 const express = require('express');
@@ -86,7 +88,7 @@ fs.mkdir('uploads', { recursive: true }).catch(console.error);
 
 app.get('/', (req, res) => res.send('Halo dari Backend Server Node.js! Terhubung ke PostgreSQL.'));
 
-// ... (route register, login, forgot/reset password tetap sama) ...
+// ... (semua route lain tetap sama) ...
 app.post('/api/register', async (req, res) => {
     try {
         const { email, password } = req.body;

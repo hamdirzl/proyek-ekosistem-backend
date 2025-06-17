@@ -1,5 +1,5 @@
 // =================================================================
-// == FILE FINAL: server.js (Tanpa Fitur Mood Tracker)           ==
+// == FILE FINAL: server.js (Update: Fitur Riwayat Link)       ==
 // =================================================================
 
 const express = require('express');
@@ -16,6 +16,7 @@ const pool = new Pool({
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
+// PINDAHKAN INI KE .env DI KEMUDIAN HARI
 const JWT_SECRET = 'ini-adalah-kunci-rahasia-yang-sangat-aman-dan-panjang';
 
 function generateSlug() { return Math.random().toString(36).substring(2, 8); }
@@ -187,12 +188,13 @@ app.post('/api/reset-password', async (req, res) => {
 
 app.get('/api/profile', authenticateToken, (req, res) => res.json({ user: req.user }));
 
-// Endpoint Mood Tracker (GET & POST) telah dihapus dari sini.
-
 // === ROUTES URL SHORTENER ===
-app.post('/api/shorten', async (req, res) => {
+
+// PERUBAHAN: Endpoint ini sekarang dilindungi, hanya untuk user yang login
+app.post('/api/shorten', authenticateToken, async (req, res) => {
     try {
         const { original_url, custom_slug } = req.body;
+        const userId = req.user.id; // PERUBAHAN: Ambil ID user dari token
 
         if (!original_url || !(original_url.startsWith('http://') || original_url.startsWith('https://'))) {
             return res.status(400).json({ error: 'URL tidak valid. Harus diawali dengan http:// atau https://' });
@@ -214,20 +216,39 @@ app.post('/api/shorten', async (req, res) => {
         } else {
             slug = generateSlug();
         }
-
+        
+        // PERUBAHAN: Simpan juga user_id saat membuat link baru
         const newLink = await pool.query(
-            'INSERT INTO links (original_url, slug) VALUES ($1, $2) RETURNING slug',
-            [original_url, slug]
+            'INSERT INTO links (original_url, slug, user_id) VALUES ($1, $2, $3) RETURNING slug, original_url, created_at',
+            [original_url, slug, userId]
         );
 
         const baseUrl = process.env.BASE_URL || `https://${req.get('host')}`;
         const fullShortUrl = `${baseUrl}/${newLink.rows[0].slug}`;
 
-        res.status(201).json({ short_url: fullShortUrl });
+        res.status(201).json({ 
+            short_url: fullShortUrl,
+            link_data: newLink.rows[0] // Kirim data link lengkap untuk ditambahkan ke riwayat
+        });
 
     } catch (error) {
         console.error("Error saat membuat link pendek:", error);
         res.status(500).json({ error: 'Gagal membuat link pendek di server.' });
+    }
+});
+
+// ENDPOINT BARU: Untuk mengambil riwayat link milik pengguna
+app.get('/api/user/links', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const result = await pool.query(
+            'SELECT slug, original_url, created_at FROM links WHERE user_id = $1 ORDER BY created_at DESC',
+            [userId]
+        );
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Error mengambil riwayat link pengguna:', error);
+        res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
     }
 });
 

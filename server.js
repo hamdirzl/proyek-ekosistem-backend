@@ -1,14 +1,6 @@
-// =================================================================
-// ==      FILE FINAL SERVER.JS (IMPLEMENTASI CLIPDROP API)       ==
-// =================================================================
-console.log("== SERVER VERSI CLIPDROP - SIAP DIGUNAKAN ==");
-
-// Baris di bawah ini adalah kode Anda yang sudah ada
+// == SERVER VERSI CLIPDROP - SIAP DIGUNAKAN ==
 require('dotenv').config();
-const express = require('express');
-// ... sisa kode Anda
 
-require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
@@ -31,7 +23,7 @@ const pool = new Pool({
 });
 
 const JWT_SECRET = process.env.JWT_SECRET;
-const CLIPDROP_API_KEY = process.env.CLIPDROP_API_KEY; // Menggunakan kunci API ClipDrop
+const CLIPDROP_API_KEY = process.env.CLIPDROP_API_KEY;
 
 function generateSlug() { return Math.random().toString(36).substring(2, 8); }
 
@@ -94,7 +86,7 @@ fs.mkdir('uploads', { recursive: true }).catch(console.error);
 
 app.get('/', (req, res) => res.send('Halo dari Backend Server Node.js! Terhubung ke PostgreSQL.'));
 
-// ... (semua route lain tetap sama) ...
+// ... (route register, login, forgot/reset password tetap sama) ...
 app.post('/api/register', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -333,6 +325,8 @@ app.post('/api/convert/images-to-pdf', authenticateToken, diskUpload.array('file
 
 // ROUTE FINAL: REMOVE BACKGROUND (MENGGUNAKAN CLIPDROP API)
 app.post('/api/tools/remove-background', authenticateToken, upload.single('imageFile'), async (req, res) => {
+    console.log('Endpoint /api/tools/remove-background diakses dengan kode ClipDrop.');
+    
     if (!req.file) {
         return res.status(400).json({ error: 'Tidak ada file gambar yang diunggah.' });
     }
@@ -356,6 +350,7 @@ app.post('/api/tools/remove-background', authenticateToken, upload.single('image
             },
         });
         
+        console.log('Berhasil menerima respons dari ClipDrop API.');
         res.setHeader('Content-Type', 'image/png');
         res.setHeader('Content-Disposition', 'attachment; filename="no-bg-clipdrop.png"');
         res.send(response.data);

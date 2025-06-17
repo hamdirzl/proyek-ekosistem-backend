@@ -13,6 +13,11 @@ const { convert } = require('libreoffice-convert');
 const { PDFDocument } = require('pdf-lib');
 const QRCode = require('qrcode');
 const sharp = require('sharp');
+const ffmpeg = require('fluent-ffmpeg'); // BARIS INI DITAMBAHKAN
+
+// Opsional: Atur path ke binary FFmpeg jika tidak ada di PATH lingkungan server
+// ffmpeg.setFfmpegPath('/usr/bin/ffmpeg'); // Contoh path di Linux
+// ffmpeg.setFfprobePath('/usr/bin/ffprobe'); // Contoh path di Linux
 
 // === KONFIGURASI DATABASE ===
 const pool = new Pool({
@@ -67,7 +72,7 @@ app.use(cors({
     'https://www.hamdirzl.my.id', 
     'https://hrportof.netlify.app'
   ],
-  exposedHeaders: ['Content-Disposition', 'X-Original-Size', 'X-Compressed-Size'] // BARIS INI DIUBAH
+  exposedHeaders: ['Content-Disposition', 'X-Original-Size', 'X-Compressed-Size']
 }));
 
 app.use(express.json());
@@ -341,7 +346,7 @@ app.post('/api/convert/images-to-pdf', authenticateToken, upload.array('files', 
     }
 });
 
-// === ROUTE BARU: QR CODE GENERATOR ===
+// === ROUTE QR CODE GENERATOR ===
 app.post('/api/generate-qr', authenticateToken, async (req, res) => {
     try {
         const { text, level = 'M', colorDark = '#000000', colorLight = '#ffffff' } = req.body;
@@ -350,19 +355,17 @@ app.post('/api/generate-qr', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: 'Teks atau URL untuk QR code tidak boleh kosong.' });
         }
 
-        // Options for QR code generation, allowing for customization (unique, professional)
         const qrOptions = {
-            errorCorrectionLevel: level, // L, M, Q, H
+            errorCorrectionLevel: level,
             type: 'image/png',
             quality: 0.92,
-            margin: 1, // Minimal margin for better scanning
+            margin: 1,
             color: {
-                dark: colorDark,    // Warna kotak QR code
-                light: colorLight   // Warna latar belakang QR code
+                dark: colorDark,
+                light: colorLight
             }
         };
 
-        // Generate QR code as a data URL (base64 image)
         const qrDataUrl = await QRCode.toDataURL(text, qrOptions);
 
         res.json({ qrCodeImage: qrDataUrl, message: 'QR Code berhasil dibuat!' });
@@ -373,7 +376,7 @@ app.post('/api/generate-qr', authenticateToken, async (req, res) => {
     }
 });
 
-// === ROUTE BARU: IMAGE COMPRESSOR ===
+// === ROUTE IMAGE COMPRESSOR ===
 app.post('/api/compress-image', authenticateToken, upload.single('image'), async (req, res) => {
     if (!req.file) {
         return res.status(400).json({ error: 'Tidak ada file gambar yang diunggah.' });
@@ -381,21 +384,17 @@ app.post('/api/compress-image', authenticateToken, upload.single('image'), async
 
     const inputPath = req.file.path;
     const originalSize = req.file.size;
-    let { quality = 80, format = 'jpeg' } = req.body; // Default quality 80, format jpeg
+    let { quality = 80, format = 'jpeg' } = req.body;
 
-    // Pastikan kualitas adalah angka dan dalam rentang 0-100
     quality = parseInt(quality);
     if (isNaN(quality) || quality < 0 || quality > 100) {
         await fs.unlink(inputPath);
         return res.status(400).json({ error: 'Nilai kualitas tidak valid. Harus antara 0 dan 100.' });
     }
 
-    // Tentukan format output berdasarkan mimetype atau input
     let outputFormat = format;
     if (req.file.mimetype.includes('png') && format === 'jpeg') {
-        // Jika input PNG tapi diminta JPEG, lakukan konversi
-        // Atau biarkan format aslinya jika tidak diminta konversi eksplisit
-        outputFormat = 'jpeg'; // Default to JPEG for size reduction
+        outputFormat = 'jpeg';
     } else if (req.file.mimetype.includes('jpeg') || req.file.mimetype.includes('jpg')) {
         outputFormat = 'jpeg';
     } else if (req.file.mimetype.includes('png')) {
@@ -413,29 +412,72 @@ app.post('/api/compress-image', authenticateToken, upload.single('image'), async
         if (outputFormat === 'jpeg') {
             compressedBuffer = await sharpInstance.jpeg({ quality: quality }).toBuffer();
         } else if (outputFormat === 'png') {
-            // PNG compression is usually lossless or near lossless, 'quality' option affects zlib compression level
-            // For lossy PNG compression (if desired), a different approach might be needed or transparency might be lost
             compressedBuffer = await sharpInstance.png({ quality: quality }).toBuffer();
         } else {
-            // Ini seharusnya sudah ditangani oleh cek outputFormat sebelumnya
             throw new Error('Unsupported output format for compression.');
         }
         
         const compressedSize = Buffer.byteLength(compressedBuffer);
 
-        // Kirim gambar yang dikompresi sebagai respons
         res.set('Content-Type', `image/${outputFormat}`);
         res.set('Content-Disposition', `attachment; filename="compressed-image.${outputFormat}"`);
-        res.set('X-Original-Size', originalSize); // Kirim ukuran asli di header
-        res.set('X-Compressed-Size', compressedSize); // Kirim ukuran terkompresi di header
+        res.set('X-Original-Size', originalSize.toString()); // Konversi ke string
+        res.set('X-Compressed-Size', compressedSize.toString()); // Konversi ke string
         res.send(compressedBuffer);
 
     } catch (error) {
         console.error('Error compressing image:', error);
         res.status(500).json({ error: 'Gagal mengompres gambar di server.' });
     } finally {
-        // Selalu hapus file yang diunggah sementara
         await fs.unlink(inputPath).catch(err => console.error("Gagal menghapus file input sementara:", err));
+    }
+});
+
+// === ROUTE BARU: AUDIO CUTTER ===
+app.post('/api/cut-audio', authenticateToken, upload.single('audio'), async (req, res) => {
+    if (!req.file) {
+        return res.status(400).json({ error: 'Tidak ada file audio yang diunggah.' });
+    }
+
+    const inputPath = req.file.path;
+    const { startTime, endTime } = req.body; // startTime dan endTime dalam detik
+
+    if (isNaN(startTime) || isNaN(endTime) || parseFloat(startTime) < 0 || parseFloat(endTime) <= parseFloat(startTime)) {
+        await fs.unlink(inputPath);
+        return res.status(400).json({ error: 'Waktu mulai atau waktu akhir tidak valid.' });
+    }
+
+    const outputFileName = `cut-audio-${Date.now()}.${req.file.originalname.split('.').pop() || 'mp3'}`;
+    const outputPath = path.join(__dirname, 'uploads', outputFileName);
+
+    try {
+        await new Promise((resolve, reject) => {
+            ffmpeg(inputPath)
+                .setStartTime(parseFloat(startTime))
+                .setDuration(parseFloat(endTime) - parseFloat(startTime))
+                .output(outputPath)
+                .on('end', async () => {
+                    console.log('Audio cutting finished successfully');
+                    resolve();
+                })
+                .on('error', (err) => {
+                    console.error('Error cutting audio:', err);
+                    reject(err);
+                })
+                .run();
+        });
+
+        res.download(outputPath, outputFileName, async (err) => {
+            if (err) console.error("Error saat mengirim file audio:", err);
+            // Hapus file sementara setelah dikirim atau jika terjadi error pengiriman
+            await fs.unlink(inputPath).catch(err => console.error("Gagal menghapus input audio file:", err));
+            await fs.unlink(outputPath).catch(err => console.error("Gagal menghapus output audio file:", err));
+        });
+
+    } catch (error) {
+        console.error('Error pada proses audio cutting:', error);
+        await fs.unlink(inputPath).catch(err => console.error("Gagal menghapus input audio file saat error:", err));
+        res.status(500).json({ error: 'Gagal memotong audio. Pastikan FFmpeg terinstal dengan benar di server.' });
     }
 });
 

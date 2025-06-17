@@ -1,7 +1,8 @@
 // =================================================================
-// == FILE FINAL: server.js (Update: Fitur Gabung Gambar ke PDF) ==
+// == FILE FINAL: server.js (Update: Fitur Remove Background)    ==
 // =================================================================
 
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
@@ -14,6 +15,8 @@ const path = require('path');
 const fs = require('fs').promises;
 const { convert } = require('libreoffice-convert');
 const { PDFDocument } = require('pdf-lib');
+const axios = require('axios');
+const FormData = require('form-data');
 
 // === KONFIGURASI DATABASE ===
 const pool = new Pool({
@@ -22,7 +25,8 @@ const pool = new Pool({
 });
 
 // PINDAHKAN INI KE .env DI KEMUDIAN HARI
-const JWT_SECRET = 'ini-adalah-kunci-rahasia-yang-sangat-aman-dan-panjang';
+const JWT_SECRET = process.env.JWT_SECRET || 'ini-adalah-kunci-rahasia-yang-sangat-aman-dan-panjang';
+const REMOVE_BG_API_KEY = process.env.REMOVE_BG_API_KEY;
 
 function generateSlug() { return Math.random().toString(36).substring(2, 8); }
 
@@ -74,7 +78,11 @@ app.use(cors({
 
 app.use(express.json());
 
-const upload = multer({ dest: 'uploads/' });
+// Menggunakan memoryStorage untuk background remover agar tidak menyimpan file sementara di server
+const storage = multer.memoryStorage();
+const upload = multer({ storage: storage });
+
+const diskUpload = multer({ dest: 'uploads/' });
 fs.mkdir('uploads', { recursive: true }).catch(console.error);
 
 
@@ -82,7 +90,7 @@ fs.mkdir('uploads', { recursive: true }).catch(console.error);
 
 app.get('/', (req, res) => res.send('Halo dari Backend Server Node.js! Terhubung ke PostgreSQL.'));
 
-// ... (semua route untuk register, login, forgot/reset password tetap sama) ...
+// ... (route register, login, forgot/reset password tetap sama) ...
 app.post('/api/register', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -197,7 +205,8 @@ app.post('/api/reset-password', async (req, res) => {
     }
 });
 
-// ... (route URL Shortener tetap sama) ...
+
+// === ROUTES URL SHORTENER ===
 app.post('/api/shorten', authenticateToken, async (req, res) => {
     try {
         const { original_url, custom_slug } = req.body;
@@ -229,7 +238,7 @@ app.post('/api/shorten', authenticateToken, async (req, res) => {
             [original_url, slug, userId]
         );
 
-        const baseUrl = process.env.BASE_URL || `https://${req.get('host')}`;
+        const baseUrl = process.env.BASE_URL || `https://link.hamdirzl.my.id`;
         const fullShortUrl = `${baseUrl}/${newLink.rows[0].slug}`;
 
         res.status(201).json({ 
@@ -258,10 +267,9 @@ app.get('/api/user/links', authenticateToken, async (req, res) => {
 });
 
 
-// === ROUTES CONVERTER ===
+// === ROUTES TOOLS & CONVERTER ===
 
-// Rute untuk konversi 1 file (Lama)
-app.post('/api/convert', authenticateToken, upload.single('file'), async (req, res) => {
+app.post('/api/convert', authenticateToken, diskUpload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'Tidak ada file yang diunggah.' });
     const { outputFormat } = req.body;
     if (!outputFormat) {
@@ -291,8 +299,7 @@ app.post('/api/convert', authenticateToken, upload.single('file'), async (req, r
     }
 });
 
-// Rute BARU untuk gabung gambar ke PDF
-app.post('/api/convert/images-to-pdf', authenticateToken, upload.array('files', 15), async (req, res) => {
+app.post('/api/convert/images-to-pdf', authenticateToken, diskUpload.array('files', 15), async (req, res) => {
     if (!req.files || req.files.length === 0) {
         return res.status(400).json({ error: 'Tidak ada file gambar yang diunggah.' });
     }
@@ -325,7 +332,43 @@ app.post('/api/convert/images-to-pdf', authenticateToken, upload.array('files', 
     }
 });
 
-// ... (route Admin dan route Redirect tetap sama) ...
+// ROUTE BARU: REMOVE BACKGROUND
+app.post('/api/tools/remove-background', authenticateToken, upload.single('imageFile'), async (req, res) => {
+    if (!req.file) {
+        return res.status(400).json({ error: 'Tidak ada file gambar yang diunggah.' });
+    }
+    if (!REMOVE_BG_API_KEY) {
+        return res.status(500).json({ error: 'Kunci API untuk layanan remove background belum dikonfigurasi di server.' });
+    }
+
+    const form = new FormData();
+    form.append('image_file', req.file.buffer, req.file.originalname);
+    form.append('size', 'auto');
+
+    try {
+        const response = await axios({
+            method: 'post',
+            url: 'https://api.remove.bg/v1/removebg',
+            data: form,
+            responseType: 'arraybuffer',
+            headers: {
+                ...form.getHeaders(),
+                'X-Api-Key': REMOVE_BG_API_KEY,
+            },
+        });
+
+        res.setHeader('Content-Type', 'image/png');
+        res.setHeader('Content-Disposition', 'attachment; filename="no-bg.png"');
+        res.send(response.data);
+
+    } catch (error) {
+        console.error('Error dari API remove.bg:', error.response ? error.response.data.toString() : error.message);
+        res.status(502).json({ error: 'Gagal menghapus background. Layanan eksternal mungkin sedang bermasalah atau terjadi kesalahan.' });
+    }
+});
+
+
+// === ROUTES ADMIN & REDIRECT ===
 app.get('/api/links', authenticateAdmin, async (req, res) => {
     try {
         const result = await pool.query('SELECT slug, original_url, created_at FROM links ORDER BY created_at DESC');
@@ -360,7 +403,8 @@ app.get('/:slug', async (req, res) => {
         if (link) {
             res.redirect(301, link.original_url);
         } else {
-            res.status(404).send('Link tidak ditemukan atau Anda mencoba mengakses halaman yang tidak ada.');
+            // Arahkan ke halaman utama jika slug tidak ditemukan
+            res.redirect(302, 'https://hamdirzl.my.id');
         }
     } catch (error) {
         console.error(error);

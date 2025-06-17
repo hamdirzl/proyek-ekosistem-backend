@@ -12,7 +12,7 @@ const fs = require('fs').promises;
 const { convert } = require('libreoffice-convert');
 const { PDFDocument } = require('pdf-lib');
 const QRCode = require('qrcode');
-const sharp = require('sharp'); // BARIS INI DITAMBAHKAN
+const sharp = require('sharp');
 
 // === KONFIGURASI DATABASE ===
 const pool = new Pool({
@@ -67,7 +67,7 @@ app.use(cors({
     'https://www.hamdirzl.my.id', 
     'https://hrportof.netlify.app'
   ],
-  exposedHeaders: ['Content-Disposition']
+  exposedHeaders: ['Content-Disposition', 'X-Original-Size', 'X-Compressed-Size'] // BARIS INI DIUBAH
 }));
 
 app.use(express.json());

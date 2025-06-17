@@ -1,8 +1,4 @@
-// == SERVER VERSI CLIPDROP - SIAP DIGUNAKAN ==
-
-console.log("== SERVER VERSI CLIPDROP - SIAP DIGUNAKAN ==");
 require('dotenv').config();
-
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
@@ -15,8 +11,6 @@ const path = require('path');
 const fs = require('fs').promises;
 const { convert } = require('libreoffice-convert');
 const { PDFDocument } = require('pdf-lib');
-const axios = require('axios');
-const FormData = require('form-data');
 
 // === KONFIGURASI DATABASE ===
 const pool = new Pool({
@@ -25,7 +19,6 @@ const pool = new Pool({
 });
 
 const JWT_SECRET = process.env.JWT_SECRET;
-const CLIPDROP_API_KEY = process.env.CLIPDROP_API_KEY;
 
 function generateSlug() { return Math.random().toString(36).substring(2, 8); }
 
@@ -77,10 +70,7 @@ app.use(cors({
 
 app.use(express.json());
 
-const storage = multer.memoryStorage();
-const upload = multer({ storage: storage });
-
-const diskUpload = multer({ dest: 'uploads/' });
+const upload = multer({ dest: 'uploads/' });
 fs.mkdir('uploads', { recursive: true }).catch(console.error);
 
 
@@ -88,7 +78,6 @@ fs.mkdir('uploads', { recursive: true }).catch(console.error);
 
 app.get('/', (req, res) => res.send('Halo dari Backend Server Node.js! Terhubung ke PostgreSQL.'));
 
-// ... (semua route lain tetap sama) ...
 app.post('/api/register', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -262,7 +251,7 @@ app.get('/api/user/links', authenticateToken, async (req, res) => {
     }
 });
 
-app.post('/api/convert', authenticateToken, diskUpload.single('file'), async (req, res) => {
+app.post('/api/convert', authenticateToken, upload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'Tidak ada file yang diunggah.' });
     const { outputFormat } = req.body;
     if (!outputFormat) {
@@ -292,7 +281,7 @@ app.post('/api/convert', authenticateToken, diskUpload.single('file'), async (re
     }
 });
 
-app.post('/api/convert/images-to-pdf', authenticateToken, diskUpload.array('files', 15), async (req, res) => {
+app.post('/api/convert/images-to-pdf', authenticateToken, upload.array('files', 15), async (req, res) => {
     if (!req.files || req.files.length === 0) {
         return res.status(400).json({ error: 'Tidak ada file gambar yang diunggah.' });
     }
@@ -322,45 +311,6 @@ app.post('/api/convert/images-to-pdf', authenticateToken, diskUpload.array('file
         for (const filePath of filePaths) {
             await fs.unlink(filePath).catch(err => console.error("Gagal menghapus file sementara:", err));
         }
-    }
-});
-
-// ROUTE FINAL: REMOVE BACKGROUND (MENGGUNAKAN CLIPDROP API)
-app.post('/api/tools/remove-background', authenticateToken, upload.single('imageFile'), async (req, res) => {
-    console.log('Endpoint /api/tools/remove-background diakses dengan kode ClipDrop.');
-    
-    if (!req.file) {
-        return res.status(400).json({ error: 'Tidak ada file gambar yang diunggah.' });
-    }
-    if (!CLIPDROP_API_KEY) {
-        console.error('FATAL: CLIPDROP_API_KEY tidak ditemukan di environment variables.');
-        return res.status(500).json({ error: 'Kunci API untuk layanan remove background belum dikonfigurasi di server.' });
-    }
-
-    const form = new FormData();
-    form.append('image_file', req.file.buffer, req.file.originalname);
-
-    try {
-        const response = await axios({
-            method: 'post',
-            url: 'https://api.clipdrop.co/v1/remove-background',
-            data: form,
-            responseType: 'arraybuffer',
-            headers: {
-                ...form.getHeaders(),
-                'x-api-key': CLIPDROP_API_KEY, // Header untuk ClipDrop
-            },
-        });
-        
-        console.log('Berhasil menerima respons dari ClipDrop API.');
-        res.setHeader('Content-Type', 'image/png');
-        res.setHeader('Content-Disposition', 'attachment; filename="no-bg-clipdrop.png"');
-        res.send(response.data);
-
-    } catch (error) {
-        const errorDetails = error.response ? error.response.data.toString() : error.message;
-        console.error('Error dari API ClipDrop:', errorDetails);
-        res.status(502).json({ error: 'Gagal menghapus background. Layanan eksternal mungkin sedang bermasalah atau terjadi kesalahan.' });
     }
 });
 

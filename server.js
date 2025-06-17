@@ -1,5 +1,5 @@
 // =================================================================
-// == FILE FINAL: server.js (Update: Fitur Remove Background)    ==
+// == FILE FINAL SERVER.JS (TERMASUK FITUR REMOVE BG & LOGGING)  ==
 // =================================================================
 
 require('dotenv').config();
@@ -24,7 +24,6 @@ const pool = new Pool({
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
-// PINDAHKAN INI KE .env DI KEMUDIAN HARI
 const JWT_SECRET = process.env.JWT_SECRET || 'ini-adalah-kunci-rahasia-yang-sangat-aman-dan-panjang';
 const REMOVE_BG_API_KEY = process.env.REMOVE_BG_API_KEY;
 
@@ -332,18 +331,31 @@ app.post('/api/convert/images-to-pdf', authenticateToken, diskUpload.array('file
     }
 });
 
-// ROUTE BARU: REMOVE BACKGROUND
+// ROUTE BARU: REMOVE BACKGROUND (DENGAN LOGGING DETAIL)
 app.post('/api/tools/remove-background', authenticateToken, upload.single('imageFile'), async (req, res) => {
+    console.log('Endpoint /api/tools/remove-background diakses.');
+
     if (!req.file) {
+        console.error('Tidak ada file yang diunggah.');
         return res.status(400).json({ error: 'Tidak ada file gambar yang diunggah.' });
     }
     if (!REMOVE_BG_API_KEY) {
+        console.error('FATAL: REMOVE_BG_API_KEY tidak ditemukan di environment variables.');
         return res.status(500).json({ error: 'Kunci API untuk layanan remove background belum dikonfigurasi di server.' });
     }
 
     const form = new FormData();
     form.append('image_file', req.file.buffer, req.file.originalname);
     form.append('size', 'auto');
+
+    // --- LOG DETAIL SEBELUM MENGIRIM PERMINTAAN ---
+    console.log('--- Data yang akan dikirim ke remove.bg ---');
+    console.log('URL Target:', 'https://api.remove.bg/v1/removebg');
+    console.log('API Key Digunakan:', `***${REMOVE_BG_API_KEY.slice(-4)}`); // Hanya menampilkan 4 digit terakhir demi keamanan
+    console.log('Nama File:', req.file.originalname);
+    console.log('Ukuran File (bytes):', req.file.size);
+    console.log('-------------------------------------------');
+
 
     try {
         const response = await axios({
@@ -356,13 +368,16 @@ app.post('/api/tools/remove-background', authenticateToken, upload.single('image
                 'X-Api-Key': REMOVE_BG_API_KEY,
             },
         });
-
+        
+        console.log('Berhasil menerima respons dari remove.bg');
         res.setHeader('Content-Type', 'image/png');
         res.setHeader('Content-Disposition', 'attachment; filename="no-bg.png"');
         res.send(response.data);
 
     } catch (error) {
-        console.error('Error dari API remove.bg:', error.response ? error.response.data.toString() : error.message);
+        // Ini akan menangkap error 404
+        const errorDetails = error.response ? error.response.data.toString() : error.message;
+        console.error('Error dari API remove.bg:', errorDetails);
         res.status(502).json({ error: 'Gagal menghapus background. Layanan eksternal mungkin sedang bermasalah atau terjadi kesalahan.' });
     }
 });

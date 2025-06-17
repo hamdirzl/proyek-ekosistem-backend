@@ -11,7 +11,8 @@ const path = require('path');
 const fs = require('fs').promises;
 const { convert } = require('libreoffice-convert');
 const { PDFDocument } = require('pdf-lib');
-const QRCode = require('qrcode'); // BARIS INI DITAMBAHKAN
+const QRCode = require('qrcode');
+const sharp = require('sharp'); // BARIS INI DITAMBAHKAN
 
 // === KONFIGURASI DATABASE ===
 const pool = new Pool({
@@ -369,6 +370,72 @@ app.post('/api/generate-qr', authenticateToken, async (req, res) => {
     } catch (error) {
         console.error('Error generating QR code:', error);
         res.status(500).json({ error: 'Gagal membuat QR Code di server.' });
+    }
+});
+
+// === ROUTE BARU: IMAGE COMPRESSOR ===
+app.post('/api/compress-image', authenticateToken, upload.single('image'), async (req, res) => {
+    if (!req.file) {
+        return res.status(400).json({ error: 'Tidak ada file gambar yang diunggah.' });
+    }
+
+    const inputPath = req.file.path;
+    const originalSize = req.file.size;
+    let { quality = 80, format = 'jpeg' } = req.body; // Default quality 80, format jpeg
+
+    // Pastikan kualitas adalah angka dan dalam rentang 0-100
+    quality = parseInt(quality);
+    if (isNaN(quality) || quality < 0 || quality > 100) {
+        await fs.unlink(inputPath);
+        return res.status(400).json({ error: 'Nilai kualitas tidak valid. Harus antara 0 dan 100.' });
+    }
+
+    // Tentukan format output berdasarkan mimetype atau input
+    let outputFormat = format;
+    if (req.file.mimetype.includes('png') && format === 'jpeg') {
+        // Jika input PNG tapi diminta JPEG, lakukan konversi
+        // Atau biarkan format aslinya jika tidak diminta konversi eksplisit
+        outputFormat = 'jpeg'; // Default to JPEG for size reduction
+    } else if (req.file.mimetype.includes('jpeg') || req.file.mimetype.includes('jpg')) {
+        outputFormat = 'jpeg';
+    } else if (req.file.mimetype.includes('png')) {
+        outputFormat = 'png';
+    } else {
+        await fs.unlink(inputPath);
+        return res.status(400).json({ error: 'Format gambar tidak didukung (hanya JPG/PNG).' });
+    }
+
+    try {
+        const imageBuffer = await fs.readFile(inputPath);
+        let compressedBuffer;
+        let sharpInstance = sharp(imageBuffer);
+
+        if (outputFormat === 'jpeg') {
+            compressedBuffer = await sharpInstance.jpeg({ quality: quality }).toBuffer();
+        } else if (outputFormat === 'png') {
+            // PNG compression is usually lossless or near lossless, 'quality' option affects zlib compression level
+            // For lossy PNG compression (if desired), a different approach might be needed or transparency might be lost
+            compressedBuffer = await sharpInstance.png({ quality: quality }).toBuffer();
+        } else {
+            // Ini seharusnya sudah ditangani oleh cek outputFormat sebelumnya
+            throw new Error('Unsupported output format for compression.');
+        }
+        
+        const compressedSize = Buffer.byteLength(compressedBuffer);
+
+        // Kirim gambar yang dikompresi sebagai respons
+        res.set('Content-Type', `image/${outputFormat}`);
+        res.set('Content-Disposition', `attachment; filename="compressed-image.${outputFormat}"`);
+        res.set('X-Original-Size', originalSize); // Kirim ukuran asli di header
+        res.set('X-Compressed-Size', compressedSize); // Kirim ukuran terkompresi di header
+        res.send(compressedBuffer);
+
+    } catch (error) {
+        console.error('Error compressing image:', error);
+        res.status(500).json({ error: 'Gagal mengompres gambar di server.' });
+    } finally {
+        // Selalu hapus file yang diunggah sementara
+        await fs.unlink(inputPath).catch(err => console.error("Gagal menghapus file input sementara:", err));
     }
 });
 

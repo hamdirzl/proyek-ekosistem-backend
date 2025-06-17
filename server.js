@@ -11,6 +11,7 @@ const path = require('path');
 const fs = require('fs').promises;
 const { convert } = require('libreoffice-convert');
 const { PDFDocument } = require('pdf-lib');
+const QRCode = require('qrcode'); // BARIS INI DITAMBAHKAN
 
 // === KONFIGURASI DATABASE ===
 const pool = new Pool({
@@ -276,7 +277,6 @@ app.delete('/api/user/links/:slug', authenticateToken, async (req, res) => {
     }
 });
 
-
 app.post('/api/convert', authenticateToken, upload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'Tidak ada file yang diunggah.' });
     const { outputFormat } = req.body;
@@ -337,6 +337,38 @@ app.post('/api/convert/images-to-pdf', authenticateToken, upload.array('files', 
         for (const filePath of filePaths) {
             await fs.unlink(filePath).catch(err => console.error("Gagal menghapus file sementara:", err));
         }
+    }
+});
+
+// === ROUTE BARU: QR CODE GENERATOR ===
+app.post('/api/generate-qr', authenticateToken, async (req, res) => {
+    try {
+        const { text, level = 'M', colorDark = '#000000', colorLight = '#ffffff' } = req.body;
+
+        if (!text) {
+            return res.status(400).json({ error: 'Teks atau URL untuk QR code tidak boleh kosong.' });
+        }
+
+        // Options for QR code generation, allowing for customization (unique, professional)
+        const qrOptions = {
+            errorCorrectionLevel: level, // L, M, Q, H
+            type: 'image/png',
+            quality: 0.92,
+            margin: 1, // Minimal margin for better scanning
+            color: {
+                dark: colorDark,    // Warna kotak QR code
+                light: colorLight   // Warna latar belakang QR code
+            }
+        };
+
+        // Generate QR code as a data URL (base64 image)
+        const qrDataUrl = await QRCode.toDataURL(text, qrOptions);
+
+        res.json({ qrCodeImage: qrDataUrl, message: 'QR Code berhasil dibuat!' });
+
+    } catch (error) {
+        console.error('Error generating QR code:', error);
+        res.status(500).json({ error: 'Gagal membuat QR Code di server.' });
     }
 });
 

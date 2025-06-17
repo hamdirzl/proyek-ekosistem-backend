@@ -251,6 +251,32 @@ app.get('/api/user/links', authenticateToken, async (req, res) => {
     }
 });
 
+// === ROUTE BARU: HAPUS TAUTAN PENGGUNA ===
+app.delete('/api/user/links/:slug', authenticateToken, async (req, res) => {
+    try {
+        const { slug } = req.params;
+        const userId = req.user.id; // Dapatkan ID pengguna dari token yang sudah diautentikasi
+
+        // Hapus tautan hanya jika user_id cocok dengan pengguna yang login
+        const result = await pool.query(
+            'DELETE FROM links WHERE slug = $1 AND user_id = $2 RETURNING slug',
+            [slug, userId]
+        );
+
+        if (result.rowCount === 0) {
+            // Jika tidak ada baris yang terhapus, bisa berarti slug tidak ada atau
+            // slug tersebut bukan milik pengguna yang sedang login
+            return res.status(404).json({ error: 'Tautan tidak ditemukan atau Anda tidak memiliki izin untuk menghapusnya.' });
+        }
+
+        res.json({ message: `Tautan dengan slug '${slug}' berhasil dihapus dari riwayat Anda.` });
+    } catch (error) {
+        console.error('Error menghapus tautan pengguna:', error);
+        res.status(500).json({ error: 'Terjadi kesalahan pada server saat menghapus tautan.' });
+    }
+});
+
+
 app.post('/api/convert', authenticateToken, upload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'Tidak ada file yang diunggah.' });
     const { outputFormat } = req.body;

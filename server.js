@@ -1,5 +1,5 @@
 // =================================================================
-// == FILE FINAL: server.js (Update: Fitur Media Converter)      ==
+// == FILE FINAL: server.js (Update: Fitur Gabung Gambar ke PDF) ==
 // =================================================================
 
 const express = require('express');
@@ -13,7 +13,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs').promises;
 const { convert } = require('libreoffice-convert');
-
+const { PDFDocument } = require('pdf-lib');
 
 // === KONFIGURASI DATABASE ===
 const pool = new Pool({
@@ -69,15 +69,12 @@ app.use(cors({
     'https://www.hamdirzl.my.id', 
     'https://hrportof.netlify.app'
   ],
-  exposedHeaders: ['Content-Disposition'] // Expose header untuk nama file
+  exposedHeaders: ['Content-Disposition']
 }));
 
 app.use(express.json());
 
-// Konfigurasi Multer untuk menangani unggahan file
-// Menyimpan file sementara di folder 'uploads'
 const upload = multer({ dest: 'uploads/' });
-// Pastikan folder uploads ada
 fs.mkdir('uploads', { recursive: true }).catch(console.error);
 
 
@@ -85,6 +82,7 @@ fs.mkdir('uploads', { recursive: true }).catch(console.error);
 
 app.get('/', (req, res) => res.send('Halo dari Backend Server Node.js! Terhubung ke PostgreSQL.'));
 
+// ... (semua route untuk register, login, forgot/reset password tetap sama) ...
 app.post('/api/register', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -199,10 +197,7 @@ app.post('/api/reset-password', async (req, res) => {
     }
 });
 
-app.get('/api/profile', authenticateToken, (req, res) => res.json({ user: req.user }));
-
-// === ROUTES URL SHORTENER ===
-
+// ... (route URL Shortener tetap sama) ...
 app.post('/api/shorten', authenticateToken, async (req, res) => {
     try {
         const { original_url, custom_slug } = req.body;
@@ -262,41 +257,33 @@ app.get('/api/user/links', authenticateToken, async (req, res) => {
     }
 });
 
-// === ROUTES MEDIA CONVERTER ===
-app.post('/api/convert', authenticateToken, upload.single('file'), async (req, res) => {
-    if (!req.file) {
-        return res.status(400).json({ error: 'Tidak ada file yang diunggah.' });
-    }
 
+// === ROUTES CONVERTER ===
+
+// Rute untuk konversi 1 file (Lama)
+app.post('/api/convert', authenticateToken, upload.single('file'), async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'Tidak ada file yang diunggah.' });
     const { outputFormat } = req.body;
     if (!outputFormat) {
         await fs.unlink(req.file.path);
         return res.status(400).json({ error: 'Format output tidak dipilih.' });
     }
-
     const inputPath = req.file.path;
     const outputPath = path.join(__dirname, 'uploads', `${Date.now()}.${outputFormat}`);
-
     try {
-        console.log(`Mencoba konversi: ${req.file.originalname} ke .${outputFormat}`);
         const fileBuffer = await fs.readFile(inputPath);
-
         let outputBuffer = await new Promise((resolve, reject) => {
             convert(fileBuffer, `.${outputFormat}`, undefined, (err, result) => {
                 if (err) return reject(err);
                 resolve(result);
             });
         });
-        
         await fs.writeFile(outputPath, outputBuffer);
-
         res.download(outputPath, `converted-file.${outputFormat}`, async (err) => {
             if (err) console.error("Error saat mengirim file:", err);
             await fs.unlink(inputPath);
             await fs.unlink(outputPath);
-            console.log("File sementara berhasil dihapus.");
         });
-
     } catch (error) {
         console.error('Error saat konversi file:', error);
         await fs.unlink(inputPath).catch(err => console.error("Gagal hapus input file saat error:", err));
@@ -304,7 +291,41 @@ app.post('/api/convert', authenticateToken, upload.single('file'), async (req, r
     }
 });
 
-// === ROUTES ADMIN ===
+// Rute BARU untuk gabung gambar ke PDF
+app.post('/api/convert/images-to-pdf', authenticateToken, upload.array('files', 15), async (req, res) => {
+    if (!req.files || req.files.length === 0) {
+        return res.status(400).json({ error: 'Tidak ada file gambar yang diunggah.' });
+    }
+    const filePaths = req.files.map(file => file.path);
+    try {
+        const pdfDoc = await PDFDocument.create();
+        for (const file of req.files) {
+            if (file.mimetype !== 'image/jpeg' && file.mimetype !== 'image/png') continue;
+            const imgBuffer = await fs.readFile(file.path);
+            let image;
+            if (file.mimetype === 'image/jpeg') {
+                image = await pdfDoc.embedJpg(imgBuffer);
+            } else {
+                image = await pdfDoc.embedPng(imgBuffer);
+            }
+            const page = pdfDoc.addPage([image.width, image.height]);
+            page.drawImage(image, { x: 0, y: 0, width: page.getWidth(), height: page.getHeight() });
+        }
+        const pdfBytes = await pdfDoc.save();
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', 'attachment; filename="hasil-gabungan.pdf"');
+        res.send(Buffer.from(pdfBytes));
+    } catch (error) {
+        console.error('Error saat menggabungkan gambar ke PDF:', error);
+        res.status(500).json({ error: 'Gagal membuat file PDF.' });
+    } finally {
+        for (const filePath of filePaths) {
+            await fs.unlink(filePath).catch(err => console.error("Gagal menghapus file sementara:", err));
+        }
+    }
+});
+
+// ... (route Admin dan route Redirect tetap sama) ...
 app.get('/api/links', authenticateAdmin, async (req, res) => {
     try {
         const result = await pool.query('SELECT slug, original_url, created_at FROM links ORDER BY created_at DESC');
@@ -331,7 +352,6 @@ app.delete('/api/links/:slug', authenticateAdmin, async (req, res) => {
     }
 });
 
-// === ROUTE PENGALIHAN URL (diletakkan paling akhir) ===
 app.get('/:slug', async (req, res) => {
     try {
         const { slug } = req.params;
@@ -347,6 +367,5 @@ app.get('/:slug', async (req, res) => {
         res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
     }
 });
-
 
 app.listen(PORT, () => console.log(`Server berjalan di port ${PORT}`));

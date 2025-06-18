@@ -36,7 +36,7 @@ const transporter = nodemailer.createTransport({
 
 // === KONFIGURASI GOOGLE GEMINI API ===
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }); // Menggunakan model "gemini-1.5-flash"
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 // =====================================
 
 // === MIDDLEWARE ===
@@ -84,8 +84,7 @@ fs.mkdir('uploads', { recursive: true }).catch(console.error);
 
 // === ROUTES ===
 
-app.get('/', (req, res) => res.send('Halo dari Backend Server Node.js! Terhubung ke PostgreSQL.'));
-
+// Autentikasi dan Registrasi
 app.post('/api/register', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -118,11 +117,34 @@ app.post('/api/login', async (req, res) => {
         console.log(`Login Berhasil: Pengguna '${user.email}' (ID: ${user.id}, Role: ${user.role}) masuk dari IP: ${ipAddress}`);
         
         const userAgent = req.headers['user-agent'];
+        const loginTime = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' }); // Mengambil waktu lokal Medan
+
         pool.query(
             'INSERT INTO login_activity (user_id, ip_address, user_agent) VALUES ($1, $2, $3)',
             [user.id, ipAddress, userAgent]
         ).catch(err => console.error('Gagal mencatat aktivitas login ke DB:', err)); 
         
+        // --- KIRIM NOTIFIKASI EMAIL LOGIN BARU ---
+        try {
+            await transporter.sendMail({
+                to: user.email,
+                from: `"Ekosistem Hamdi" <${process.env.EMAIL_USER}>`,
+                subject: 'Pemberitahuan Login Akun Anda',
+                html: `<p>Halo,</p>
+                       <p>Kami mendeteksi login ke akun Anda (<strong>${user.email}</strong>) pada:</p>
+                       <p><strong>Waktu:</strong> ${loginTime} WIB</p>
+                       <p><strong>Dari IP Address:</strong> ${ipAddress}</p>
+                       <p><strong>Perangkat/Browser:</strong> ${userAgent || 'Tidak diketahui'}</p>
+                       <p>Jika ini bukan Anda, segera ubah password Anda atau hubungi admin.</p>
+                       <p>Terima kasih,</p>
+                       <p>Tim Hamdi Rizal</p>`
+            });
+            console.log(`Login notification email sent to ${user.email}`);
+        } catch (mailError) {
+            console.error('Failed to send login notification email:', mailError);
+        }
+        // --- AKHIR NOTIFIKASI EMAIL LOGIN BARU ---
+
         const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '1h' });
         res.json({ message: 'Login berhasil!', token });
 
@@ -200,6 +222,7 @@ app.post('/api/reset-password', async (req, res) => {
     }
 });
 
+// Tool APIs
 app.post('/api/shorten', authenticateToken, async (req, res) => {
     try {
         const { original_url, custom_slug } = req.body;
@@ -491,7 +514,7 @@ app.post('/api/chat-with-ai', authenticateToken, async (req, res) => {
 });
 
 
-// === ROUTES ADMIN & REDIRECT ===
+// === ROUTES ADMIN (PENTING: PASTIKAN BLOK INI SEBELUM app.get('/:slug')) ===
 app.get('/api/links', authenticateAdmin, async (req, res) => {
     try {
         const result = await pool.query('SELECT slug, original_url, created_at FROM links ORDER BY created_at DESC');
@@ -518,6 +541,78 @@ app.delete('/api/links/:slug', authenticateAdmin, async (req, res) => {
     }
 });
 
+// Endpoint untuk mendapatkan semua pengguna (hanya admin)
+app.get('/api/admin/users', authenticateAdmin, async (req, res) => {
+    try {
+        const result = await pool.query('SELECT id, email, role, created_at FROM users ORDER BY created_at DESC');
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Error fetching all users for admin:', error);
+        res.status(500).json({ error: 'Failed to fetch user list.' });
+    }
+});
+
+// Endpoint untuk mengubah peran pengguna (hanya admin)
+app.put('/api/admin/users/:id/role', authenticateAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { role } = req.body; // 'user' atau 'admin'
+
+        if (!['user', 'admin'].includes(role)) {
+            return res.status(400).json({ error: 'Invalid role specified.' });
+        }
+
+        // Mencegah admin mengubah peran dirinya sendiri atau admin lain
+        if (req.user.id == id && role !== 'admin') { // Perbandingan `==` karena `req.user.id` mungkin string
+            return res.status(403).json({ error: 'Admin cannot change their own role to non-admin directly.' });
+        }
+
+        const result = await pool.query(
+            'UPDATE users SET role = $1 WHERE id = $2 RETURNING id, email, role',
+            [role, id]
+        );
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: 'User not found.' });
+        }
+
+        res.json({ message: `User ${result.rows[0].email} role updated to ${result.rows[0].role}.`, user: result.rows[0] });
+
+    } catch (error) {
+        console.error('Error updating user role:', error);
+        res.status(500).json({ error: 'Failed to update user role.' });
+    }
+});
+
+// Endpoint untuk menghapus pengguna (hanya admin)
+app.delete('/api/admin/users/:id', authenticateAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        // Mencegah admin menghapus dirinya sendiri
+        if (req.user.id == id) { // Perbandingan `==` karena `req.user.id` mungkin string
+            return res.status(403).json({ error: 'Admin cannot delete their own account.' });
+        }
+
+        const result = await pool.query('DELETE FROM users WHERE id = $1 RETURNING email', [id]);
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: 'User not found.' });
+        }
+
+        res.json({ message: `User ${result.rows[0].email} deleted successfully.` });
+
+    } catch (error) {
+        console.error('Error deleting user:', error);
+        res.status(500).json({ error: 'Failed to delete user.' });
+    }
+});
+
+
+// === ROOT ROUTE (opsional, tapi biasanya di sini) ===
+app.get('/', (req, res) => res.send('Halo dari Backend Server Node.js! Terhubung ke PostgreSQL.'));
+
+// === WILDCARD REDIRECT ROUTE (HARUS DI POSISI TERAKHIR) ===
 app.get('/:slug', async (req, res) => {
     try {
         const { slug } = req.params;

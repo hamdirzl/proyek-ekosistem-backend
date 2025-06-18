@@ -13,7 +13,7 @@ const { convert } = require('libreoffice-convert');
 const { PDFDocument } = require('pdf-lib');
 const QRCode = require('qrcode');
 const sharp = require('sharp');
-const OpenAI = require("openai"); // BARIS INI DITAMBAHKAN, ganti GoogleGenerativeAI
+const { GoogleGenerativeAI } = require("@google/generative-ai"); // GANTI INI DARI 'openai'
 
 // === KONFIGURASI DATABASE ===
 const pool = new Pool({
@@ -34,10 +34,9 @@ const transporter = nodemailer.createTransport({
     }
 });
 
-// === KONFIGURASI OPENAI API === // BARIS INI DAN DI BAWAHNYA DITAMBAHKAN
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY, // Ini adalah kunci API yang Anda dapatkan
-});
+// === KONFIGURASI GOOGLE GEMINI API ===
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const model = genAI.getGenerativeModel({ model: "gemini-pro" }); // Menggunakan model "gemini-pro"
 // =====================================
 
 // === MIDDLEWARE ===
@@ -273,8 +272,6 @@ app.delete('/api/user/links/:slug', authenticateToken, async (req, res) => {
         );
 
         if (result.rowCount === 0) {
-            // Jika tidak ada baris yang terhapus, bisa berarti slug tidak ada atau
-            // slug tersebut bukan milik pengguna yang sedang login
             return res.status(404).json({ error: 'Tautan tidak ditemukan atau Anda tidak memiliki izin untuk menghapusnya.' });
         }
 
@@ -458,30 +455,31 @@ app.post('/api/chat-with-ai', authenticateToken, async (req, res) => {
 
         console.log(`Pesan dari pengguna ${userId}: ${userMessage}`);
 
-        // Panggil OpenAI API
-        const completion = await openai.chat.completions.create({
-            model: "gpt-3.5-turbo", // Anda bisa mengganti dengan model GPT lain yang Anda inginkan (misal "gpt-4o")
-            messages: [
-                {"role": "system", "content": "Anda adalah asisten AI yang ramah dan informatif, fokus untuk menjawab pertanyaan seputar situs Hamdi Rizal (portofolio, tools, jurnal, dan informasi pribadi Hamdi seperti hobi atau ketertarikan) atau memberikan bantuan umum. Jika pertanyaan di luar topik, sampaikan bahwa Anda tidak memiliki informasi tersebut."},
-                {"role": "user", "content": userMessage}
+        // Panggil Google Gemini API
+        const chat = model.startChat({
+            history: [
+                // Anda bisa mengisi history chat sebelumnya di sini jika ingin mempertahankan konteks
+                // Contoh: { role: "user", parts: [{ text: "Halo AI!" }] },
+                //          { role: "model", parts: [{ text: "Halo juga! Ada yang bisa saya bantu?" }] },
             ],
-            max_tokens: 150, // Batasi panjang respons AI
-            temperature: 0.7, // Kontrol kreativitas/randomness respons
+            generationConfig: {
+                maxOutputTokens: 200, // Batasi panjang respons AI
+            },
         });
 
-        const aiReply = completion.choices[0].message.content;
+        const result = await chat.sendMessage(userMessage);
+        const response = await result.response;
+        const text = response.text();
 
-        res.json({ reply: aiReply });
+        res.json({ reply: text });
 
     } catch (error) {
-        console.error('Error calling OpenAI API:', error);
-        // Tangani error spesifik dari OpenAI API jika perlu
-        if (error.response && error.response.data) {
-            console.error('OpenAI API Response Error:', error.response.status, error.response.data);
-        } else if (error.message) {
-            console.error('OpenAI Error Message:', error.message);
+        console.error('Error calling Gemini API:', error);
+        if (error.response && error.response.status) {
+            // Log detail error dari API eksternal jika tersedia
+            console.error('Gemini API Response Error:', error.response.status, error.response.statusText, await error.response.json());
         }
-        res.status(500).json({ error: 'Terjadi kesalahan saat memproses pesan AI. Pastikan kunci API OpenAI Anda valid dan memiliki kuota.' });
+        res.status(500).json({ error: 'Terjadi kesalahan saat memproses pesan AI. Pastikan kunci API Gemini Anda valid dan memiliki kuota.' });
     }
 });
 

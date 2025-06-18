@@ -597,25 +597,48 @@ app.put('/api/admin/users/:id/role', authenticateAdmin, async (req, res) => {
     }
 });
 
+// Ganti route app.delete('/api/admin/users/:id', ...) yang lama dengan yang ini
 app.delete('/api/admin/users/:id', authenticateAdmin, async (req, res) => {
-    try {
-        const { id } = req.params;
+    const { id } = req.params;
+    // Dapatkan client dari pool untuk menjalankan transaksi
+    const client = await pool.connect();
 
-        if (req.user.id == id) { 
+    try {
+        if (req.user.id == id) {
             return res.status(403).json({ error: 'Admin cannot delete their own account.' });
         }
 
-        const result = await pool.query('DELETE FROM users WHERE id = $1 RETURNING email', [id]);
+        // Mulai transaksi
+        await client.query('BEGIN');
+
+        // 1. Hapus semua data dari login_activity yang terkait dengan pengguna ini
+        await client.query('DELETE FROM login_activity WHERE user_id = $1', [id]);
+        
+        // 2. Hapus semua link yang dibuat oleh pengguna ini (praktik terbaik)
+        await client.query('DELETE FROM links WHERE user_id = $1', [id]);
+
+        // 3. Setelah data terkait bersih, baru hapus pengguna dari tabel users
+        const result = await client.query('DELETE FROM users WHERE id = $1 RETURNING email', [id]);
 
         if (result.rowCount === 0) {
+            // Jika pengguna tidak ditemukan, batalkan transaksi
+            await client.query('ROLLBACK');
             return res.status(404).json({ error: 'User not found.' });
         }
 
-        res.json({ message: `User ${result.rows[0].email} deleted successfully.` });
+        // Jika semua berhasil, commit transaksi
+        await client.query('COMMIT');
+
+        res.json({ message: `Pengguna ${result.rows[0].email} dan semua data terkaitnya berhasil dihapus.` });
 
     } catch (error) {
-        console.error('Error deleting user:', error);
-        res.status(500).json({ error: 'Failed to delete user.' });
+        // Jika terjadi kesalahan di salah satu langkah, batalkan semua perubahan
+        await client.query('ROLLBACK');
+        console.error('Error deleting user with transaction:', error);
+        res.status(500).json({ error: 'Gagal menghapus pengguna karena kesalahan server.' });
+    } finally {
+        // Pastikan untuk melepaskan client kembali ke pool
+        client.release();
     }
 });
 

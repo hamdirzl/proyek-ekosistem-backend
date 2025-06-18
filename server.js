@@ -13,7 +13,7 @@ const { convert } = require('libreoffice-convert');
 const { PDFDocument } = require('pdf-lib');
 const QRCode = require('qrcode');
 const sharp = require('sharp');
-const { GoogleGenerativeAI } = require("@google/generative-ai"); // GANTI INI DARI 'openai'
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 // === KONFIGURASI DATABASE ===
 const pool = new Pool({
@@ -36,7 +36,7 @@ const transporter = nodemailer.createTransport({
 
 // === KONFIGURASI GOOGLE GEMINI API ===
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-pro" }); // Menggunakan model "gemini-pro"
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }); // Menggunakan model "gemini-1.5-flash"
 // =====================================
 
 // === MIDDLEWARE ===
@@ -272,6 +272,8 @@ app.delete('/api/user/links/:slug', authenticateToken, async (req, res) => {
         );
 
         if (result.rowCount === 0) {
+            // Jika tidak ada baris yang terhapus, bisa berarti slug tidak ada atau
+            // slug tersebut bukan milik pengguna yang sedang login
             return res.status(404).json({ error: 'Tautan tidak ditemukan atau Anda tidak memiliki izin untuk menghapusnya.' });
         }
 
@@ -475,11 +477,16 @@ app.post('/api/chat-with-ai', authenticateToken, async (req, res) => {
 
     } catch (error) {
         console.error('Error calling Gemini API:', error);
+        // Log detail error dari API eksternal jika tersedia
         if (error.response && error.response.status) {
-            // Log detail error dari API eksternal jika tersedia
-            console.error('Gemini API Response Error:', error.response.status, error.response.statusText, await error.response.json());
+            console.error('Gemini API Response Status:', error.response.status);
+            console.error('Gemini API Response Data:', await error.response.json()); // Mencoba untuk log body respons error
+        } else if (error.message) {
+            console.error('Gemini API Error Message:', error.message);
+        } else {
+            console.error('An unexpected error occurred with Gemini API.');
         }
-        res.status(500).json({ error: 'Terjadi kesalahan saat memproses pesan AI. Pastikan kunci API Gemini Anda valid dan memiliki kuota.' });
+        res.status(500).json({ error: 'Terjadi kesalahan saat memproses pesan AI. Pastikan kunci API Gemini Anda valid dan memiliki kuota. Coba gunakan model yang berbeda jika error 404 terus terjadi.' });
     }
 });
 

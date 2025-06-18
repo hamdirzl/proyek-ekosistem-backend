@@ -21,8 +21,6 @@ const pool = new Pool({
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
-const JWT_SECRET = process.env.JWT_SECRET;
-
 function generateSlug() { return Math.random().toString(36).substring(2, 8); }
 
 // === KONFIGURASI PENGIRIM EMAIL (NODEMAILER) ===
@@ -37,7 +35,6 @@ const transporter = nodemailer.createTransport({
 // === KONFIGURASI GOOGLE GEMINI API ===
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-// =====================================
 
 // === MIDDLEWARE ===
 function authenticateToken(req, res, next) {
@@ -45,8 +42,9 @@ function authenticateToken(req, res, next) {
     const token = authHeader && authHeader.split(' ')[1];
     if (token == null) return res.sendStatus(401);
 
-    jwt.verify(token, JWT_SECRET, (err, user) => {
-        if (err) return res.sendStatus(403);
+    // Verifikasi menggunakan JWT_SECRET biasa untuk Access Token
+    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+        if (err) return res.sendStatus(403); // Token kedaluwarsa atau tidak valid
         req.user = user;
         next();
     });
@@ -60,7 +58,6 @@ function authenticateAdmin(req, res, next) {
         next();
     });
 }
-
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -80,7 +77,6 @@ app.use(express.json());
 
 const upload = multer({ dest: 'uploads/' });
 fs.mkdir('uploads', { recursive: true }).catch(console.error);
-
 
 // === ROUTES ===
 
@@ -103,6 +99,7 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
+// PERUBAHAN: Endpoint Login sekarang menghasilkan accessToken dan refreshToken
 app.post('/api/login', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -117,14 +114,13 @@ app.post('/api/login', async (req, res) => {
         console.log(`Login Berhasil: Pengguna '${user.email}' (ID: ${user.id}, Role: ${user.role}) masuk dari IP: ${ipAddress}`);
         
         const userAgent = req.headers['user-agent'];
-        const loginTime = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' }); // Mengambil waktu lokal Medan
+        const loginTime = new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
 
         pool.query(
             'INSERT INTO login_activity (user_id, ip_address, user_agent) VALUES ($1, $2, $3)',
             [user.id, ipAddress, userAgent]
         ).catch(err => console.error('Gagal mencatat aktivitas login ke DB:', err)); 
         
-        // --- KIRIM NOTIFIKASI EMAIL LOGIN BARU ---
         try {
             await transporter.sendMail({
                 to: user.email,
@@ -143,16 +139,61 @@ app.post('/api/login', async (req, res) => {
         } catch (mailError) {
             console.error('Failed to send login notification email:', mailError);
         }
-        // --- AKHIR NOTIFIKASI EMAIL LOGIN BARU ---
 
-        const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '1h' });
-        res.json({ message: 'Login berhasil!', token });
+        // Membuat accessToken (berlaku singkat) dan refreshToken (berlaku lama)
+        const userPayload = { id: user.id, email: user.email, role: user.role };
+        const accessToken = jwt.sign(userPayload, process.env.JWT_SECRET, { expiresIn: '15m' });
+        const refreshToken = jwt.sign(userPayload, process.env.JWT_REFRESH_SECRET, { expiresIn: '90d' });
+
+        // Simpan refreshToken ke database
+        await pool.query('UPDATE users SET refresh_token = $1 WHERE id = $2', [refreshToken, user.id]);
+
+        res.json({ message: 'Login berhasil!', accessToken, refreshToken });
 
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
     }
 });
+
+// BARU: Endpoint untuk Logout
+app.post('/api/logout', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        // Hapus refresh token dari database
+        await pool.query('UPDATE users SET refresh_token = NULL WHERE id = $1', [userId]);
+        res.status(200).json({ message: 'Logout berhasil.' });
+    } catch (error) {
+        console.error("Error logging out:", error);
+        res.status(500).json({ error: 'Gagal melakukan logout.' });
+    }
+});
+
+
+// BARU: Endpoint untuk me-refresh Access Token
+app.post('/api/refresh-token', async (req, res) => {
+    const { token } = req.body;
+    if (!token) return res.status(401).json({ error: 'Refresh token tidak ada.' });
+
+    try {
+        const userResult = await pool.query('SELECT * FROM users WHERE refresh_token = $1', [token]);
+        const user = userResult.rows[0];
+        if (!user) return res.status(403).json({ error: 'Refresh token tidak valid.' });
+
+        jwt.verify(token, process.env.JWT_REFRESH_SECRET, (err, decoded) => {
+            if (err) return res.status(403).json({ error: 'Refresh token kedaluwarsa atau tidak valid.' });
+            
+            const userPayload = { id: decoded.id, email: decoded.email, role: decoded.role };
+            const newAccessToken = jwt.sign(userPayload, process.env.JWT_SECRET, { expiresIn: '15m' });
+            
+            res.json({ accessToken: newAccessToken });
+        });
+    } catch (error) {
+        console.error("Error refreshing token:", error);
+        res.status(500).json({ error: 'Kesalahan server saat refresh token.' });
+    }
+});
+
 
 app.post('/api/forgot-password', async (req, res) => {
     try {
@@ -282,21 +323,17 @@ app.get('/api/user/links', authenticateToken, async (req, res) => {
     }
 });
 
-// === ROUTE BARU: HAPUS TAUTAN PENGGUNA ===
 app.delete('/api/user/links/:slug', authenticateToken, async (req, res) => {
     try {
         const { slug } = req.params;
-        const userId = req.user.id; // Dapatkan ID pengguna dari token yang sudah diautentikasi
+        const userId = req.user.id; 
 
-        // Hapus tautan hanya jika user_id cocok dengan pengguna yang login
         const result = await pool.query(
             'DELETE FROM links WHERE slug = $1 AND user_id = $2 RETURNING slug',
             [slug, userId]
         );
 
         if (result.rowCount === 0) {
-            // Jika tidak ada baris yang terhapus, bisa berarti slug tidak ada atau
-            // slug tersebut bukan milik pengguna yang sedang login
             return res.status(404).json({ error: 'Tautan tidak ditemukan atau Anda tidak memiliki izin untuk menghapusnya.' });
         }
 
@@ -370,7 +407,6 @@ app.post('/api/convert/images-to-pdf', authenticateToken, upload.array('files', 
     }
 });
 
-// === ROUTE BARU: QR CODE GENERATOR ===
 app.post('/api/generate-qr', authenticateToken, async (req, res) => {
     try {
         const { text, level = 'M', colorDark = '#000000', colorLight = '#ffffff' } = req.body;
@@ -379,21 +415,18 @@ app.post('/api/generate-qr', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: 'Teks atau URL untuk QR code tidak boleh kosong.' });
         }
 
-        // Options for QR code generation, allowing for customization (unique, professional)
         const qrOptions = {
-            errorCorrectionLevel: level, // L, M, Q, H
+            errorCorrectionLevel: level,
             type: 'image/png',
             quality: 0.92,
-            margin: 1, // Minimal margin for better scanning
+            margin: 1, 
             color: {
-                dark: colorDark,    // Warna kotak QR code
-                light: colorLight   // Warna latar belakang QR code
+                dark: colorDark,
+                light: colorLight
             }
         };
 
-        // Generate QR code as a data URL (base64 image)
         const qrDataUrl = await QRCode.toDataURL(text, qrOptions);
-
         res.json({ qrCodeImage: qrDataUrl, message: 'QR Code berhasil dibuat!' });
 
     } catch (error) {
@@ -402,7 +435,6 @@ app.post('/api/generate-qr', authenticateToken, async (req, res) => {
     }
 });
 
-// === ROUTE BARU: IMAGE COMPRESSOR ===
 app.post('/api/compress-image', authenticateToken, upload.single('image'), async (req, res) => {
     if (!req.file) {
         return res.status(400).json({ error: 'Tidak ada file gambar yang diunggah.' });
@@ -410,21 +442,17 @@ app.post('/api/compress-image', authenticateToken, upload.single('image'), async
 
     const inputPath = req.file.path;
     const originalSize = req.file.size;
-    let { quality = 80, format = 'jpeg' } = req.body; // Default quality 80, format jpeg
+    let { quality = 80, format = 'jpeg' } = req.body;
 
-    // Pastikan kualitas adalah angka dan dalam rentang 0-100
     quality = parseInt(quality);
     if (isNaN(quality) || quality < 0 || quality > 100) {
         await fs.unlink(inputPath);
         return res.status(400).json({ error: 'Nilai kualitas tidak valid. Harus antara 0 dan 100.' });
     }
 
-    // Tentukan format output berdasarkan mimetype atau input
     let outputFormat = format;
     if (req.file.mimetype.includes('png') && format === 'jpeg') {
-        // Jika input PNG tapi diminta JPEG, lakukan konversi
-        // Atau biarkan format aslinya jika tidak diminta konversi eksplisit
-        outputFormat = 'jpeg'; // Default to JPEG for size reduction
+        outputFormat = 'jpeg';
     } else if (req.file.mimetype.includes('jpeg') || req.file.mimetype.includes('jpg')) {
         outputFormat = 'jpeg';
     } else if (req.file.mimetype.includes('png')) {
@@ -442,33 +470,27 @@ app.post('/api/compress-image', authenticateToken, upload.single('image'), async
         if (outputFormat === 'jpeg') {
             compressedBuffer = await sharpInstance.jpeg({ quality: quality }).toBuffer();
         } else if (outputFormat === 'png') {
-            // PNG compression is usually lossless or near lossless, 'quality' option affects zlib compression level
-            // For lossy PNG compression (if desired), a different approach might be needed or transparency might be lost
             compressedBuffer = await sharpInstance.png({ quality: quality }).toBuffer();
         } else {
-            // Ini seharusnya sudah ditangani oleh cek outputFormat sebelumnya
             throw new Error('Unsupported output format for compression.');
         }
         
         const compressedSize = Buffer.byteLength(compressedBuffer);
 
-        // Kirim gambar yang dikompresi sebagai respons
         res.set('Content-Type', `image/${outputFormat}`);
         res.set('Content-Disposition', `attachment; filename="compressed-image.${outputFormat}"`);
-        res.set('X-Original-Size', originalSize); // Kirim ukuran asli di header
-        res.set('X-Compressed-Size', compressedSize); // Kirim ukuran terkompresi di header
+        res.set('X-Original-Size', originalSize);
+        res.set('X-Compressed-Size', compressedSize); 
         res.send(compressedBuffer);
 
     } catch (error) {
         console.error('Error compressing image:', error);
         res.status(500).json({ error: 'Gagal mengompres gambar di server.' });
     } finally {
-        // Selalu hapus file yang diunggah sementara
         await fs.unlink(inputPath).catch(err => console.error("Gagal menghapus file input sementara:", err));
     }
 });
 
-// === ROUTE BARU: CHAT WITH AI ===
 app.post('/api/chat-with-ai', authenticateToken, async (req, res) => {
     try {
         const userMessage = req.body.message;
@@ -480,15 +502,10 @@ app.post('/api/chat-with-ai', authenticateToken, async (req, res) => {
 
         console.log(`Pesan dari pengguna ${userId}: ${userMessage}`);
 
-        // Panggil Google Gemini API
         const chat = model.startChat({
-            history: [
-                // Anda bisa mengisi history chat sebelumnya di sini jika ingin mempertahankan konteks
-                // Contoh: { role: "user", parts: [{ text: "Halo AI!" }] },
-                //          { role: "model", parts: [{ text: "Halo juga! Ada yang bisa saya bantu?" }] },
-            ],
+            history: [],
             generationConfig: {
-                maxOutputTokens: 200, // Batasi panjang respons AI
+                maxOutputTokens: 200,
             },
         });
 
@@ -500,10 +517,9 @@ app.post('/api/chat-with-ai', authenticateToken, async (req, res) => {
 
     } catch (error) {
         console.error('Error calling Gemini API:', error);
-        // Log detail error dari API eksternal jika tersedia
         if (error.response && error.response.status) {
             console.error('Gemini API Response Status:', error.response.status);
-            console.error('Gemini API Response Data:', await error.response.json()); // Mencoba untuk log body respons error
+            console.error('Gemini API Response Data:', await error.response.json()); 
         } else if (error.message) {
             console.error('Gemini API Error Message:', error.message);
         } else {
@@ -514,7 +530,7 @@ app.post('/api/chat-with-ai', authenticateToken, async (req, res) => {
 });
 
 
-// === ROUTES ADMIN (PENTING: PASTIKAN BLOK INI SEBELUM app.get('/:slug')) ===
+// === ROUTES ADMIN ===
 app.get('/api/links', authenticateAdmin, async (req, res) => {
     try {
         const result = await pool.query('SELECT slug, original_url, created_at FROM links ORDER BY created_at DESC');
@@ -541,7 +557,6 @@ app.delete('/api/links/:slug', authenticateAdmin, async (req, res) => {
     }
 });
 
-// Endpoint untuk mendapatkan semua pengguna (hanya admin)
 app.get('/api/admin/users', authenticateAdmin, async (req, res) => {
     try {
         const result = await pool.query('SELECT id, email, role, created_at FROM users ORDER BY created_at DESC');
@@ -552,18 +567,16 @@ app.get('/api/admin/users', authenticateAdmin, async (req, res) => {
     }
 });
 
-// Endpoint untuk mengubah peran pengguna (hanya admin)
 app.put('/api/admin/users/:id/role', authenticateAdmin, async (req, res) => {
     try {
         const { id } = req.params;
-        const { role } = req.body; // 'user' atau 'admin'
+        const { role } = req.body; 
 
         if (!['user', 'admin'].includes(role)) {
             return res.status(400).json({ error: 'Invalid role specified.' });
         }
 
-        // Mencegah admin mengubah peran dirinya sendiri atau admin lain
-        if (req.user.id == id && role !== 'admin') { // Perbandingan `==` karena `req.user.id` mungkin string
+        if (req.user.id == id && role !== 'admin') { 
             return res.status(403).json({ error: 'Admin cannot change their own role to non-admin directly.' });
         }
 
@@ -584,13 +597,11 @@ app.put('/api/admin/users/:id/role', authenticateAdmin, async (req, res) => {
     }
 });
 
-// Endpoint untuk menghapus pengguna (hanya admin)
 app.delete('/api/admin/users/:id', authenticateAdmin, async (req, res) => {
     try {
         const { id } = req.params;
 
-        // Mencegah admin menghapus dirinya sendiri
-        if (req.user.id == id) { // Perbandingan `==` karena `req.user.id` mungkin string
+        if (req.user.id == id) { 
             return res.status(403).json({ error: 'Admin cannot delete their own account.' });
         }
 
@@ -609,10 +620,10 @@ app.delete('/api/admin/users/:id', authenticateAdmin, async (req, res) => {
 });
 
 
-// === ROOT ROUTE (opsional, tapi biasanya di sini) ===
+// === ROOT ROUTE ===
 app.get('/', (req, res) => res.send('Halo dari Backend Server Node.js! Terhubung ke PostgreSQL.'));
 
-// === WILDCARD REDIRECT ROUTE (HARUS DI POSISI TERAKHIR) ===
+// === WILDCARD REDIRECT ROUTE ===
 app.get('/:slug', async (req, res) => {
     try {
         const { slug } = req.params;

@@ -439,6 +439,43 @@ app.post('/api/compress-image', authenticateToken, upload.single('image'), async
     }
 });
 
+// === ROUTE BARU: CHAT WITH AI ===
+app.post('/api/chat-with-ai', authenticateToken, async (req, res) => {
+    try {
+        const userMessage = req.body.message;
+        const userId = req.user.id; 
+
+        if (!userMessage) {
+            return res.status(400).json({ error: 'Pesan tidak boleh kosong.' });
+        }
+
+        console.log(`Pesan dari pengguna ${userId}: ${userMessage}`);
+
+        // --- LOGIKA SIMULASI RESPON AI ---
+        let aiReply;
+        if (userMessage.toLowerCase().includes('halo')) {
+            aiReply = "Halo juga! Ada yang bisa saya bantu hari ini?";
+        } else if (userMessage.toLowerCase().includes('siapa kamu')) {
+            aiReply = "Saya adalah asisten AI yang dibuat untuk membantu Anda di situs ini.";
+        } else if (userMessage.toLowerCase().includes('apa saja fiturnya')) {
+            aiReply = "Di situs ini Anda bisa menemukan portofolio, tools (pemendek URL, konverter media, penggabung gambar ke PDF, generator QR Code, kompresor gambar), dan jurnal saya.";
+        } else if (userMessage.toLowerCase().includes('bagaimana cuaca')) {
+            aiReply = "Maaf, saya tidak memiliki akses ke informasi cuaca saat ini. Saya hanya bisa menjawab pertanyaan seputar situs ini.";
+        } else if (userMessage.toLowerCase().includes('terima kasih')) {
+            aiReply = "Sama-sama! Senang bisa membantu.";
+        } else {
+            aiReply = "Mohon maaf, saya belum bisa memahami pertanyaan Anda. Bisakah Anda bertanya tentang fitur-fitur di situs ini atau tentang Hamdi Rizal?";
+        }
+        // --- AKHIR LOGIKA SIMULASI ---
+
+        res.json({ reply: aiReply });
+
+    } catch (error) {
+        console.error('Error in /api/chat-with-ai:', error);
+        res.status(500).json({ error: 'Terjadi kesalahan pada server saat memproses pesan AI.' });
+    }
+});
+
 
 // === ROUTES ADMIN & REDIRECT ===
 app.get('/api/links', authenticateAdmin, async (req, res) => {

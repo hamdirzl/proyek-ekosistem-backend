@@ -13,6 +13,7 @@ const { convert } = require('libreoffice-convert');
 const { PDFDocument } = require('pdf-lib');
 const QRCode = require('qrcode');
 const sharp = require('sharp');
+const OpenAI = require("openai"); // BARIS INI DITAMBAHKAN, ganti GoogleGenerativeAI
 
 // === KONFIGURASI DATABASE ===
 const pool = new Pool({
@@ -32,6 +33,12 @@ const transporter = nodemailer.createTransport({
         pass: process.env.EMAIL_PASS
     }
 });
+
+// === KONFIGURASI OPENAI API === // BARIS INI DAN DI BAWAHNYA DITAMBAHKAN
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY, // Ini adalah kunci API yang Anda dapatkan
+});
+// =====================================
 
 // === MIDDLEWARE ===
 function authenticateToken(req, res, next) {
@@ -67,7 +74,7 @@ app.use(cors({
     'https://www.hamdirzl.my.id', 
     'https://hrportof.netlify.app'
   ],
-  exposedHeaders: ['Content-Disposition', 'X-Original-Size', 'X-Compressed-Size'] // BARIS INI DIUBAH
+  exposedHeaders: ['Content-Disposition', 'X-Original-Size', 'X-Compressed-Size']
 }));
 
 app.use(express.json());
@@ -451,28 +458,30 @@ app.post('/api/chat-with-ai', authenticateToken, async (req, res) => {
 
         console.log(`Pesan dari pengguna ${userId}: ${userMessage}`);
 
-        // --- LOGIKA SIMULASI RESPON AI ---
-        let aiReply;
-        if (userMessage.toLowerCase().includes('halo')) {
-            aiReply = "Halo juga! Ada yang bisa saya bantu hari ini?";
-        } else if (userMessage.toLowerCase().includes('siapa kamu')) {
-            aiReply = "Saya adalah asisten AI yang dibuat untuk membantu Anda di situs ini.";
-        } else if (userMessage.toLowerCase().includes('apa saja fiturnya')) {
-            aiReply = "Di situs ini Anda bisa menemukan portofolio, tools (pemendek URL, konverter media, penggabung gambar ke PDF, generator QR Code, kompresor gambar), dan jurnal saya.";
-        } else if (userMessage.toLowerCase().includes('bagaimana cuaca')) {
-            aiReply = "Maaf, saya tidak memiliki akses ke informasi cuaca saat ini. Saya hanya bisa menjawab pertanyaan seputar situs ini.";
-        } else if (userMessage.toLowerCase().includes('terima kasih')) {
-            aiReply = "Sama-sama! Senang bisa membantu.";
-        } else {
-            aiReply = "Mohon maaf, saya belum bisa memahami pertanyaan Anda. Bisakah Anda bertanya tentang fitur-fitur di situs ini atau tentang Hamdi Rizal?";
-        }
-        // --- AKHIR LOGIKA SIMULASI ---
+        // Panggil OpenAI API
+        const completion = await openai.chat.completions.create({
+            model: "gpt-3.5-turbo", // Anda bisa mengganti dengan model GPT lain yang Anda inginkan (misal "gpt-4o")
+            messages: [
+                {"role": "system", "content": "Anda adalah asisten AI yang ramah dan informatif, fokus untuk menjawab pertanyaan seputar situs Hamdi Rizal (portofolio, tools, jurnal, dan informasi pribadi Hamdi seperti hobi atau ketertarikan) atau memberikan bantuan umum. Jika pertanyaan di luar topik, sampaikan bahwa Anda tidak memiliki informasi tersebut."},
+                {"role": "user", "content": userMessage}
+            ],
+            max_tokens: 150, // Batasi panjang respons AI
+            temperature: 0.7, // Kontrol kreativitas/randomness respons
+        });
+
+        const aiReply = completion.choices[0].message.content;
 
         res.json({ reply: aiReply });
 
     } catch (error) {
-        console.error('Error in /api/chat-with-ai:', error);
-        res.status(500).json({ error: 'Terjadi kesalahan pada server saat memproses pesan AI.' });
+        console.error('Error calling OpenAI API:', error);
+        // Tangani error spesifik dari OpenAI API jika perlu
+        if (error.response && error.response.data) {
+            console.error('OpenAI API Response Error:', error.response.status, error.response.data);
+        } else if (error.message) {
+            console.error('OpenAI Error Message:', error.message);
+        }
+        res.status(500).json({ error: 'Terjadi kesalahan saat memproses pesan AI. Pastikan kunci API OpenAI Anda valid dan memiliki kuota.' });
     }
 });
 

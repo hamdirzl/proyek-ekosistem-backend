@@ -42,9 +42,8 @@ function authenticateToken(req, res, next) {
     const token = authHeader && authHeader.split(' ')[1];
     if (token == null) return res.sendStatus(401);
 
-    // Verifikasi menggunakan JWT_SECRET biasa untuk Access Token
     jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
-        if (err) return res.sendStatus(403); // Token kedaluwarsa atau tidak valid
+        if (err) return res.sendStatus(403);
         req.user = user;
         next();
     });
@@ -99,7 +98,6 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
-// PERUBAHAN: Endpoint Login sekarang menghasilkan accessToken dan refreshToken
 app.post('/api/login', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -140,12 +138,10 @@ app.post('/api/login', async (req, res) => {
             console.error('Failed to send login notification email:', mailError);
         }
 
-        // Membuat accessToken (berlaku singkat) dan refreshToken (berlaku lama)
         const userPayload = { id: user.id, email: user.email, role: user.role };
         const accessToken = jwt.sign(userPayload, process.env.JWT_SECRET, { expiresIn: '15m' });
         const refreshToken = jwt.sign(userPayload, process.env.JWT_REFRESH_SECRET, { expiresIn: '90d' });
 
-        // Simpan refreshToken ke database
         await pool.query('UPDATE users SET refresh_token = $1 WHERE id = $2', [refreshToken, user.id]);
 
         res.json({ message: 'Login berhasil!', accessToken, refreshToken });
@@ -156,11 +152,9 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// BARU: Endpoint untuk Logout
 app.post('/api/logout', authenticateToken, async (req, res) => {
     try {
         const userId = req.user.id;
-        // Hapus refresh token dari database
         await pool.query('UPDATE users SET refresh_token = NULL WHERE id = $1', [userId]);
         res.status(200).json({ message: 'Logout berhasil.' });
     } catch (error) {
@@ -169,8 +163,6 @@ app.post('/api/logout', authenticateToken, async (req, res) => {
     }
 });
 
-
-// BARU: Endpoint untuk me-refresh Access Token
 app.post('/api/refresh-token', async (req, res) => {
     const { token } = req.body;
     if (!token) return res.status(401).json({ error: 'Refresh token tidak ada.' });
@@ -193,7 +185,6 @@ app.post('/api/refresh-token', async (req, res) => {
         res.status(500).json({ error: 'Kesalahan server saat refresh token.' });
     }
 });
-
 
 app.post('/api/forgot-password', async (req, res) => {
     try {
@@ -263,7 +254,8 @@ app.post('/api/reset-password', async (req, res) => {
     }
 });
 
-// Tool APIs
+// === ROUTES PENGGUNA & PERKAKAS ===
+
 app.post('/api/shorten', authenticateToken, async (req, res) => {
     try {
         const { original_url, custom_slug } = req.body;
@@ -341,6 +333,63 @@ app.delete('/api/user/links/:slug', authenticateToken, async (req, res) => {
     } catch (error) {
         console.error('Error menghapus tautan pengguna:', error);
         res.status(500).json({ error: 'Terjadi kesalahan pada server saat menghapus tautan.' });
+    }
+});
+
+// Endpoint untuk mengambil statistik dasbor pengguna
+app.get('/api/user/dashboard-stats', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        const linksResult = await pool.query('SELECT COUNT(*) FROM links WHERE user_id = $1', [userId]);
+        const linkCount = parseInt(linksResult.rows[0].count, 10);
+
+        const activityResult = await pool.query(
+            'SELECT ip_address, created_at FROM login_activity WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1',
+            [userId]
+        );
+        const lastLogin = activityResult.rows[0];
+
+        res.json({
+            linkCount,
+            lastLogin: lastLogin ? {
+                ip: lastLogin.ip_address,
+                time: new Date(lastLogin.created_at).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })
+            } : null
+        });
+
+    } catch (error) {
+        console.error('Error fetching user dashboard stats:', error);
+        res.status(500).json({ error: 'Gagal mengambil data dasbor.' });
+    }
+});
+
+// Endpoint untuk mengubah password pengguna
+app.post('/api/user/change-password', authenticateToken, async (req, res) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+        const userId = req.user.id;
+
+        if (!currentPassword || !newPassword || newPassword.length < 6) {
+            return res.status(400).json({ error: 'Semua kolom wajib diisi dan password baru minimal 6 karakter.' });
+        }
+
+        const userResult = await pool.query('SELECT password_hash FROM users WHERE id = $1', [userId]);
+        const user = userResult.rows[0];
+
+        const isPasswordCorrect = await bcrypt.compare(currentPassword, user.password_hash);
+        if (!isPasswordCorrect) {
+            return res.status(403).json({ error: 'Password saat ini salah.' });
+        }
+
+        const newPasswordHash = await bcrypt.hash(newPassword, 10);
+        await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [newPasswordHash, userId]);
+
+        res.json({ message: 'Password berhasil diperbarui!' });
+
+    } catch (error) {
+        console.error('Error changing password:', error);
+        res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
     }
 });
 
@@ -517,15 +566,7 @@ app.post('/api/chat-with-ai', authenticateToken, async (req, res) => {
 
     } catch (error) {
         console.error('Error calling Gemini API:', error);
-        if (error.response && error.response.status) {
-            console.error('Gemini API Response Status:', error.response.status);
-            console.error('Gemini API Response Data:', await error.response.json()); 
-        } else if (error.message) {
-            console.error('Gemini API Error Message:', error.message);
-        } else {
-            console.error('An unexpected error occurred with Gemini API.');
-        }
-        res.status(500).json({ error: 'Terjadi kesalahan saat memproses pesan AI. Pastikan kunci API Gemini Anda valid dan memiliki kuota. Coba gunakan model yang berbeda jika error 404 terus terjadi.' });
+        res.status(500).json({ error: 'Terjadi kesalahan saat memproses pesan AI.' });
     }
 });
 
@@ -533,7 +574,13 @@ app.post('/api/chat-with-ai', authenticateToken, async (req, res) => {
 // === ROUTES ADMIN ===
 app.get('/api/links', authenticateAdmin, async (req, res) => {
     try {
-        const result = await pool.query('SELECT slug, original_url, created_at FROM links ORDER BY created_at DESC');
+        const { search = '' } = req.query;
+        const searchTerm = `%${search}%`;
+        
+        const result = await pool.query(
+            'SELECT slug, original_url, created_at FROM links WHERE slug ILIKE $1 OR original_url ILIKE $1 ORDER BY created_at DESC',
+            [searchTerm]
+        );
         res.json(result.rows);
     } catch (error) {
         console.error('Error mengambil semua link:', error);
@@ -559,7 +606,13 @@ app.delete('/api/links/:slug', authenticateAdmin, async (req, res) => {
 
 app.get('/api/admin/users', authenticateAdmin, async (req, res) => {
     try {
-        const result = await pool.query('SELECT id, email, role, created_at FROM users ORDER BY created_at DESC');
+        const { search = '' } = req.query;
+        const searchTerm = `%${search}%`;
+
+        const result = await pool.query(
+            'SELECT id, email, role, created_at FROM users WHERE email ILIKE $1 ORDER BY created_at DESC',
+            [searchTerm]
+        );
         res.json(result.rows);
     } catch (error) {
         console.error('Error fetching all users for admin:', error);
@@ -597,10 +650,8 @@ app.put('/api/admin/users/:id/role', authenticateAdmin, async (req, res) => {
     }
 });
 
-// Ganti route app.delete('/api/admin/users/:id', ...) yang lama dengan yang ini
 app.delete('/api/admin/users/:id', authenticateAdmin, async (req, res) => {
     const { id } = req.params;
-    // Dapatkan client dari pool untuk menjalankan transaksi
     const client = await pool.connect();
 
     try {
@@ -608,36 +659,24 @@ app.delete('/api/admin/users/:id', authenticateAdmin, async (req, res) => {
             return res.status(403).json({ error: 'Admin cannot delete their own account.' });
         }
 
-        // Mulai transaksi
         await client.query('BEGIN');
-
-        // 1. Hapus semua data dari login_activity yang terkait dengan pengguna ini
         await client.query('DELETE FROM login_activity WHERE user_id = $1', [id]);
-        
-        // 2. Hapus semua link yang dibuat oleh pengguna ini (praktik terbaik)
         await client.query('DELETE FROM links WHERE user_id = $1', [id]);
-
-        // 3. Setelah data terkait bersih, baru hapus pengguna dari tabel users
         const result = await client.query('DELETE FROM users WHERE id = $1 RETURNING email', [id]);
 
         if (result.rowCount === 0) {
-            // Jika pengguna tidak ditemukan, batalkan transaksi
             await client.query('ROLLBACK');
             return res.status(404).json({ error: 'User not found.' });
         }
 
-        // Jika semua berhasil, commit transaksi
         await client.query('COMMIT');
-
         res.json({ message: `Pengguna ${result.rows[0].email} dan semua data terkaitnya berhasil dihapus.` });
 
     } catch (error) {
-        // Jika terjadi kesalahan di salah satu langkah, batalkan semua perubahan
         await client.query('ROLLBACK');
         console.error('Error deleting user with transaction:', error);
         res.status(500).json({ error: 'Gagal menghapus pengguna karena kesalahan server.' });
     } finally {
-        // Pastikan untuk melepaskan client kembali ke pool
         client.release();
     }
 });

@@ -74,8 +74,13 @@ app.use(cors({
 
 app.use(express.json());
 
+// Middleware untuk menyajikan file statis dari folder 'public'
+app.use('/public', express.static(path.join(__dirname, 'public')));
+
 const upload = multer({ dest: 'uploads/' });
 fs.mkdir('uploads', { recursive: true }).catch(console.error);
+fs.mkdir(path.join(__dirname, 'public', 'uploads'), { recursive: true }).catch(console.error); // Pastikan folder public ada
+
 
 // === ROUTES ===
 
@@ -336,17 +341,13 @@ app.delete('/api/user/links/:slug', authenticateToken, async (req, res) => {
     }
 });
 
-// Endpoint untuk mengambil statistik dasbor pengguna
 app.get('/api/user/dashboard-stats', authenticateToken, async (req, res) => {
     try {
         const userId = req.user.id;
 
-        // 1. Menghitung jumlah tautan yang dibuat pengguna
         const linksResult = await pool.query('SELECT COUNT(*) FROM links WHERE user_id = $1', [userId]);
         const linkCount = parseInt(linksResult.rows[0].count, 10);
 
-        // 2. Mengambil aktivitas login terakhir
-        // PERBAIKAN: Mengganti 'created_at' menjadi 'login_timestamp' agar sesuai dengan database Anda
         const activityResult = await pool.query(
             'SELECT ip_address, login_timestamp FROM login_activity WHERE user_id = $1 ORDER BY login_timestamp DESC LIMIT 1',
             [userId]
@@ -357,7 +358,6 @@ app.get('/api/user/dashboard-stats', authenticateToken, async (req, res) => {
             linkCount,
             lastLogin: lastLogin ? {
                 ip: lastLogin.ip_address,
-                // PERBAIKAN: Menggunakan 'lastLogin.login_timestamp'
                 time: new Date(lastLogin.login_timestamp).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })
             } : null
         });
@@ -368,7 +368,6 @@ app.get('/api/user/dashboard-stats', authenticateToken, async (req, res) => {
     }
 });
 
-// Endpoint untuk mengubah password pengguna
 app.post('/api/user/change-password', authenticateToken, async (req, res) => {
     try {
         const { currentPassword, newPassword } = req.body;
@@ -574,6 +573,18 @@ app.post('/api/chat-with-ai', authenticateToken, async (req, res) => {
     }
 });
 
+// === ROUTES PORTOFOLIO (BARU) ===
+
+// ENDPOINT PUBLIK: Mengambil semua proyek portofolio
+app.get('/api/portfolio', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT id, title, description, image_url, project_link FROM portfolio_projects ORDER BY created_at DESC');
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Error fetching portfolio projects:', error);
+        res.status(500).json({ error: 'Gagal mengambil data portofolio.' });
+    }
+});
 
 // === ROUTES ADMIN ===
 app.get('/api/links', authenticateAdmin, async (req, res) => {
@@ -682,6 +693,114 @@ app.delete('/api/admin/users/:id', authenticateAdmin, async (req, res) => {
         res.status(500).json({ error: 'Gagal menghapus pengguna karena kesalahan server.' });
     } finally {
         client.release();
+    }
+});
+
+
+// === ROUTES ADMIN PORTOFOLIO (BARU) ===
+
+// ENDPOINT ADMIN: Mengambil semua proyek untuk manajemen
+app.get('/api/admin/portfolio', authenticateAdmin, async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM portfolio_projects ORDER BY created_at DESC');
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Error fetching portfolio for admin:', error);
+        res.status(500).json({ error: 'Gagal mengambil data portofolio untuk admin.' });
+    }
+});
+
+// ENDPOINT ADMIN: Membuat proyek portofolio baru
+app.post('/api/admin/portfolio', authenticateAdmin, upload.single('image'), async (req, res) => {
+    try {
+        const { title, description, project_link } = req.body;
+        if (!req.file || !title || !description) {
+            if (req.file) await fs.unlink(req.file.path).catch(err => console.error(err));
+            return res.status(400).json({ error: 'Gambar, judul, dan deskripsi wajib diisi.' });
+        }
+
+        const tempPath = req.file.path;
+        const newFileName = `${Date.now()}-${req.file.originalname.replace(/\s+/g, '_')}`;
+        const publicPath = path.join(__dirname, 'public', 'uploads', newFileName);
+        await fs.rename(tempPath, publicPath);
+        
+        const imageUrl = `/public/uploads/${newFileName}`;
+
+        const newProject = await pool.query(
+            'INSERT INTO portfolio_projects (title, description, project_link, image_url, user_id) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+            [title, description, project_link || null, imageUrl, req.user.id]
+        );
+
+        res.status(201).json(newProject.rows[0]);
+
+    } catch (error) {
+        console.error('Error creating portfolio project:', error);
+        if (req.file) await fs.unlink(req.file.path).catch(err => console.error(err));
+        res.status(500).json({ error: 'Gagal membuat proyek portofolio.' });
+    }
+});
+
+// ENDPOINT ADMIN: Memperbarui proyek portofolio
+app.put('/api/admin/portfolio/:id', authenticateAdmin, upload.single('image'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { title, description, project_link } = req.body;
+
+        const oldDataResult = await pool.query('SELECT image_url FROM portfolio_projects WHERE id = $1', [id]);
+        if (oldDataResult.rows.length === 0) {
+             if (req.file) await fs.unlink(req.file.path).catch(err => console.error(err));
+            return res.status(404).json({ error: 'Proyek tidak ditemukan.' });
+        }
+        const oldImageUrl = oldDataResult.rows[0].image_url;
+        let newImageUrl = oldImageUrl;
+
+        if (req.file) {
+            if (oldImageUrl) {
+                const oldImagePath = path.join(__dirname, oldImageUrl);
+                await fs.unlink(oldImagePath).catch(err => console.log(`Gagal menghapus file lama: ${err.message}`));
+            }
+            const tempPath = req.file.path;
+            const newFileName = `${Date.now()}-${req.file.originalname.replace(/\s+/g, '_')}`;
+            const publicPath = path.join(__dirname, 'public', 'uploads', newFileName);
+            await fs.rename(tempPath, publicPath);
+            newImageUrl = `/public/uploads/${newFileName}`;
+        }
+
+        const updatedProject = await pool.query(
+            'UPDATE portfolio_projects SET title = $1, description = $2, project_link = $3, image_url = $4 WHERE id = $5 RETURNING *',
+            [title, description, project_link || null, newImageUrl, id]
+        );
+
+        res.json(updatedProject.rows[0]);
+    } catch (error) {
+        console.error('Error updating portfolio project:', error);
+         if (req.file) await fs.unlink(req.file.path).catch(err => console.error(err));
+        res.status(500).json({ error: 'Gagal memperbarui proyek portofolio.' });
+    }
+});
+
+// ENDPOINT ADMIN: Menghapus proyek portofolio
+app.delete('/api/admin/portfolio/:id', authenticateAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const projectResult = await pool.query('SELECT image_url FROM portfolio_projects WHERE id = $1', [id]);
+        if (projectResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Proyek tidak ditemukan.' });
+        }
+        const imageUrl = projectResult.rows[0].image_url;
+        
+        await pool.query('DELETE FROM portfolio_projects WHERE id = $1', [id]);
+
+        if (imageUrl) {
+            const imagePath = path.join(__dirname, imageUrl);
+            await fs.unlink(imagePath).catch(err => console.log(`Gagal menghapus file: ${err.message}`));
+        }
+
+        res.status(200).json({ message: 'Proyek berhasil dihapus.' });
+    } catch (error) {
+        console.error('Error deleting portfolio project:', error);
+        res.status(500).json({ error: 'Gagal menghapus proyek portofolio.' });
     }
 });
 

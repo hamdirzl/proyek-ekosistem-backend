@@ -79,7 +79,7 @@ app.use('/public', express.static(path.join(__dirname, 'public')));
 
 const upload = multer({ dest: 'uploads/' });
 fs.mkdir('uploads', { recursive: true }).catch(console.error);
-fs.mkdir(path.join(__dirname, 'public', 'uploads'), { recursive: true }).catch(console.error);
+fs.mkdir(path.join(__dirname, 'public', 'uploads'), { recursive: true }).catch(console.error); // Pastikan folder public ada
 
 
 // === ROUTES ===
@@ -573,7 +573,7 @@ app.post('/api/chat-with-ai', authenticateToken, async (req, res) => {
     }
 });
 
-// === ROUTES PORTOFOLIO (FINAL) ===
+// === ROUTES PORTOFOLIO (BARU) ===
 
 // ENDPOINT PUBLIK: Mengambil semua proyek portofolio
 app.get('/api/portfolio', async (req, res) => {
@@ -586,24 +586,118 @@ app.get('/api/portfolio', async (req, res) => {
     }
 });
 
-// ENDPOINT PUBLIK: Mengambil satu proyek portofolio berdasarkan ID
-app.get('/api/portfolio/:id', async (req, res) => {
+// === ROUTES ADMIN ===
+app.get('/api/links', authenticateAdmin, async (req, res) => {
     try {
-        const { id } = req.params;
-        const result = await pool.query('SELECT * FROM portfolio_projects WHERE id = $1', [id]);
-
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: 'Proyek tidak ditemukan.' });
-        }
-
-        res.json(result.rows[0]);
+        const { search = '' } = req.query;
+        const searchTerm = `%${search}%`;
+        
+        const result = await pool.query(
+            'SELECT slug, original_url, created_at FROM links WHERE slug ILIKE $1 OR original_url ILIKE $1 ORDER BY created_at DESC',
+            [searchTerm]
+        );
+        res.json(result.rows);
     } catch (error) {
-        console.error(`Error fetching project with id ${req.params.id}:`, error);
-        res.status(500).json({ error: 'Gagal mengambil data proyek.' });
+        console.error('Error mengambil semua link:', error);
+        res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
     }
 });
 
-// === ROUTES ADMIN PORTOFOLIO (FINAL) ===
+app.delete('/api/links/:slug', authenticateAdmin, async (req, res) => {
+    try {
+        const { slug } = req.params;
+        const result = await pool.query('DELETE FROM links WHERE slug = $1 RETURNING slug', [slug]);
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: 'Link dengan slug tersebut tidak ditemukan.' });
+        }
+
+        res.json({ message: `Link dengan slug '${slug}' berhasil dihapus.` });
+    } catch (error) {
+        console.error('Error menghapus link:', error);
+        res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+    }
+});
+
+app.get('/api/admin/users', authenticateAdmin, async (req, res) => {
+    try {
+        const { search = '' } = req.query;
+        const searchTerm = `%${search}%`;
+
+        const result = await pool.query(
+            'SELECT id, email, role, created_at FROM users WHERE email ILIKE $1 ORDER BY created_at DESC',
+            [searchTerm]
+        );
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Error fetching all users for admin:', error);
+        res.status(500).json({ error: 'Failed to fetch user list.' });
+    }
+});
+
+app.put('/api/admin/users/:id/role', authenticateAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { role } = req.body; 
+
+        if (!['user', 'admin'].includes(role)) {
+            return res.status(400).json({ error: 'Invalid role specified.' });
+        }
+
+        if (req.user.id == id && role !== 'admin') { 
+            return res.status(403).json({ error: 'Admin cannot change their own role to non-admin directly.' });
+        }
+
+        const result = await pool.query(
+            'UPDATE users SET role = $1 WHERE id = $2 RETURNING id, email, role',
+            [role, id]
+        );
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: 'User not found.' });
+        }
+
+        res.json({ message: `User ${result.rows[0].email} role updated to ${result.rows[0].role}.`, user: result.rows[0] });
+
+    } catch (error) {
+        console.error('Error updating user role:', error);
+        res.status(500).json({ error: 'Failed to update user role.' });
+    }
+});
+
+app.delete('/api/admin/users/:id', authenticateAdmin, async (req, res) => {
+    const { id } = req.params;
+    const client = await pool.connect();
+
+    try {
+        if (req.user.id == id) {
+            return res.status(403).json({ error: 'Admin cannot delete their own account.' });
+        }
+
+        await client.query('BEGIN');
+        await client.query('DELETE FROM login_activity WHERE user_id = $1', [id]);
+        await client.query('DELETE FROM links WHERE user_id = $1', [id]);
+        const result = await client.query('DELETE FROM users WHERE id = $1 RETURNING email', [id]);
+
+        if (result.rowCount === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'User not found.' });
+        }
+
+        await client.query('COMMIT');
+        res.json({ message: `Pengguna ${result.rows[0].email} dan semua data terkaitnya berhasil dihapus.` });
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error deleting user with transaction:', error);
+        res.status(500).json({ error: 'Gagal menghapus pengguna karena kesalahan server.' });
+    } finally {
+        client.release();
+    }
+});
+
+
+// === ROUTES ADMIN PORTOFOLIO (BARU) ===
 
 // ENDPOINT ADMIN: Mengambil semua proyek untuk manajemen
 app.get('/api/admin/portfolio', authenticateAdmin, async (req, res) => {
@@ -709,6 +803,7 @@ app.delete('/api/admin/portfolio/:id', authenticateAdmin, async (req, res) => {
         res.status(500).json({ error: 'Gagal menghapus proyek portofolio.' });
     }
 });
+
 
 // === ROOT ROUTE ===
 app.get('/', (req, res) => res.send('Halo dari Backend Server Node.js! Terhubung ke PostgreSQL.'));

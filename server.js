@@ -576,13 +576,22 @@ app.post('/api/chat-with-ai', authenticateToken, async (req, res) => {
 // === ROUTES PORTOFOLIO (BARU) ===
 
 // ENDPOINT PUBLIK: Mengambil semua proyek portofolio
-app.get('/api/portfolio', async (req, res) => {
+app.get('/api/portfolio/:id', async (req, res) => {
     try {
-        const result = await pool.query('SELECT id, title, description, image_url, project_link FROM portfolio_projects ORDER BY created_at DESC');
-        res.json(result.rows);
+        const { id } = req.params;
+        const result = await pool.query('SELECT id, title, description, image_url, project_link, created_at FROM portfolio_projects WHERE id = $1', [id]);
+
+        if (result.rows.length === 0) {
+            // Jika tidak ada proyek yang ditemukan, kirim status 404
+            return res.status(404).json({ error: 'Proyek tidak ditemukan.' });
+        }
+
+        // Kirim data proyek sebagai JSON
+        res.json(result.rows[0]);
+
     } catch (error) {
-        console.error('Error fetching portfolio projects:', error);
-        res.status(500).json({ error: 'Gagal mengambil data portofolio.' });
+        console.error(`Error fetching portfolio project with id ${req.params.id}:`, error);
+        res.status(500).json({ error: 'Gagal mengambil data proyek.' });
     }
 });
 

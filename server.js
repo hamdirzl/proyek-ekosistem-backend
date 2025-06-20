@@ -341,11 +341,14 @@ app.get('/api/user/dashboard-stats', authenticateToken, async (req, res) => {
     try {
         const userId = req.user.id;
 
+        // 1. Menghitung jumlah tautan yang dibuat pengguna
         const linksResult = await pool.query('SELECT COUNT(*) FROM links WHERE user_id = $1', [userId]);
         const linkCount = parseInt(linksResult.rows[0].count, 10);
 
+        // 2. Mengambil aktivitas login terakhir
+        // PERBAIKAN: Mengganti 'created_at' menjadi 'login_timestamp' agar sesuai dengan database Anda
         const activityResult = await pool.query(
-            'SELECT ip_address, created_at FROM login_activity WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1',
+            'SELECT ip_address, login_timestamp FROM login_activity WHERE user_id = $1 ORDER BY login_timestamp DESC LIMIT 1',
             [userId]
         );
         const lastLogin = activityResult.rows[0];
@@ -354,7 +357,8 @@ app.get('/api/user/dashboard-stats', authenticateToken, async (req, res) => {
             linkCount,
             lastLogin: lastLogin ? {
                 ip: lastLogin.ip_address,
-                time: new Date(lastLogin.created_at).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })
+                // PERBAIKAN: Menggunakan 'lastLogin.login_timestamp'
+                time: new Date(lastLogin.login_timestamp).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })
             } : null
         });
 

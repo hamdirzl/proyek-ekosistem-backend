@@ -766,40 +766,57 @@ app.post('/api/admin/portfolio', authenticateAdmin, upload.single('image'), asyn
     }
 });
 // ENDPOINT ADMIN: Memperbarui proyek portofolio
+
+// Ganti blok PUT yang lama dengan yang ini
 app.put('/api/admin/portfolio/:id', authenticateAdmin, upload.single('image'), async (req, res) => {
     try {
         const { id } = req.params;
         const { title, description, project_link } = req.body;
-
+        
+        // Cek apakah proyek ada
         const oldDataResult = await pool.query('SELECT image_url FROM portfolio_projects WHERE id = $1', [id]);
         if (oldDataResult.rows.length === 0) {
-             if (req.file) await fs.unlink(req.file.path).catch(err => console.error(err));
+            if (req.file) await fs.unlink(req.file.path).catch(err => console.error(err));
             return res.status(404).json({ error: 'Proyek tidak ditemukan.' });
         }
-        const oldImageUrl = oldDataResult.rows[0].image_url;
-        let newImageUrl = oldImageUrl;
+        
+        let imageUrl = oldDataResult.rows[0].image_url;
 
+        // Jika ada file gambar baru yang diunggah
         if (req.file) {
-            if (oldImageUrl) {
-                const oldImagePath = path.join(__dirname, oldImageUrl);
-                await fs.unlink(oldImagePath).catch(err => console.log(`Gagal menghapus file lama: ${err.message}`));
-            }
-            const tempPath = req.file.path;
+            // 1. Upload gambar baru ke B2
+            const fileContent = await fs.readFile(req.file.path);
             const newFileName = `${Date.now()}-${req.file.originalname.replace(/\s+/g, '_')}`;
-            const publicPath = path.join(__dirname, 'public', 'uploads', newFileName);
-            await fs.rename(tempPath, publicPath);
-            newImageUrl = `/public/uploads/${newFileName}`;
+            const uploadParams = {
+                Bucket: process.env.B2_BUCKET_NAME,
+                Key: newFileName,
+                Body: fileContent,
+                ContentType: req.file.mimetype
+            };
+            await s3Client.send(new PutObjectCommand(uploadParams));
+            await fs.unlink(req.file.path); // Hapus file sementara
+            
+            // 2. Hapus gambar lama dari B2 jika ada
+            if (imageUrl) {
+                const deleteParams = { Bucket: process.env.B2_BUCKET_NAME, Key: imageUrl };
+                await s3Client.send(new DeleteObjectCommand(deleteParams));
+            }
+            
+            // 3. Gunakan nama file baru untuk disimpan ke DB
+            imageUrl = newFileName;
         }
 
+        // Update data di database
         const updatedProject = await pool.query(
             'UPDATE portfolio_projects SET title = $1, description = $2, project_link = $3, image_url = $4 WHERE id = $5 RETURNING *',
-            [title, description, project_link || null, newImageUrl, id]
+            [title, description, project_link || null, imageUrl, id]
         );
 
         res.json(updatedProject.rows[0]);
+
     } catch (error) {
         console.error('Error updating portfolio project:', error);
-         if (req.file) await fs.unlink(req.file.path).catch(err => console.error(err));
+        if (req.file) await fs.unlink(req.file.path).catch(err => console.error("Gagal hapus file temp saat error:", err));
         res.status(500).json({ error: 'Gagal memperbarui proyek portofolio.' });
     }
 });

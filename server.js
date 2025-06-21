@@ -1,16 +1,4 @@
 require('dotenv').config();
-
-// --- TAMBAHKAN KODE DEBUG DI BAWAH INI ---
-console.log("--- Memeriksa Environment Variables B2 ---");
-console.log("B2_BUCKET_NAME:", process.env.B2_BUCKET_NAME);
-console.log("B2_ENDPOINT:", process.env.B2_ENDPOINT);
-console.log("B2_KEY_ID:", process.env.B2_KEY_ID);
-console.log("B2_APPLICATION_KEY:", process.env.B2_APPLICATION_KEY ? '*** DITEMUKAN ***' : '!!! TIDAK DITEMUKAN !!!');
-console.log("-----------------------------------------");
-// --- BATAS KODE DEBUG ---
-
-const express = require('express');
-// ... sisa kode Anda berlanjut seperti biasa
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
@@ -598,6 +586,17 @@ app.post('/api/chat-with-ai', authenticateToken, async (req, res) => {
 
 // === ROUTES PORTOFOLIO (BARU) ===
 
+// ENDPOINT ADMIN: Mengambil semua proyek untuk manajemen
+app.get('/api/admin/portfolio', authenticateAdmin, async (req, res) => {
+    try {
+        const result = await pool.query('SELECT id, title, description, project_link, image_url, created_at FROM portfolio_projects ORDER BY created_at DESC');
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Error fetching portfolio projects for admin:', error);
+        res.status(500).json({ error: 'Gagal mengambil data portofolio untuk admin.' });
+    }
+});
+
 // ENDPOINT PUBLIK: Mengambil semua proyek portofolio
 app.get('/api/portfolio', async (req, res) => {
     try {
@@ -665,11 +664,14 @@ app.get('/api/admin/users', authenticateAdmin, async (req, res) => {
         const { search = '' } = req.query;
         const searchTerm = `%${search}%`;
 
-          const result = await pool.query('SELECT * FROM portfolio_projects ORDER BY created_at DESC');
+        const result = await pool.query(
+            'SELECT id, email, role, created_at FROM users WHERE email ILIKE $1 ORDER BY created_at DESC',
+            [searchTerm]
+        );
         res.json(result.rows);
     } catch (error) {
-        console.error('Error fetching admin portfolio projects:', error);
-        res.status(500).json({ error: 'Gagal mengambil data portofolio admin.' });
+        console.error('Error fetching all users for admin:', error);
+        res.status(500).json({ error: 'Failed to fetch user list.' });
     }
 });
 

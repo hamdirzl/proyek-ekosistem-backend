@@ -727,6 +727,18 @@ app.delete('/api/admin/users/:id', authenticateAdmin, async (req, res) => {
 
 
 // === ROUTES ADMIN PORTOFOLIO (BARU) ===
+// ENDPOINT ADMIN: Mengambil SEMUA proyek portofolio (UNTUK PANEL ADMIN)
+app.get('/api/admin/portfolio', authenticateAdmin, async (req, res) => {
+    try {
+        // Ambil semua proyek dari database, urutkan dari yang terbaru
+        const result = await pool.query('SELECT * FROM portfolio_projects ORDER BY created_at DESC');
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Error fetching all portfolio projects for admin:', error);
+        res.status(500).json({ error: 'Gagal mengambil data portofolio untuk admin.' });
+    }
+});
+
 // ENDPOINT ADMIN: Membuat proyek (VERSI B2 PRIVATE PROXY)
 app.post('/api/admin/portfolio', authenticateAdmin, upload.single('image'), async (req, res) => {
     try {

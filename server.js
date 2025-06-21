@@ -1,4 +1,16 @@
 require('dotenv').config();
+
+// --- TAMBAHKAN KODE DEBUG DI BAWAH INI ---
+console.log("--- Memeriksa Environment Variables B2 ---");
+console.log("B2_BUCKET_NAME:", process.env.B2_BUCKET_NAME);
+console.log("B2_ENDPOINT:", process.env.B2_ENDPOINT);
+console.log("B2_KEY_ID:", process.env.B2_KEY_ID);
+console.log("B2_APPLICATION_KEY:", process.env.B2_APPLICATION_KEY ? '*** DITEMUKAN ***' : '!!! TIDAK DITEMUKAN !!!');
+console.log("-----------------------------------------");
+// --- BATAS KODE DEBUG ---
+
+const express = require('express');
+// ... sisa kode Anda berlanjut seperti biasa
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcrypt');

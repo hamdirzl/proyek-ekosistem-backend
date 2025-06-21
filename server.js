@@ -771,10 +771,22 @@ app.post('/api/admin/portfolio', authenticateAdmin, upload.single('image'), asyn
         res.status(201).json(newProject.rows[0]);
 
     } catch (error) {
-        console.error('Error creating portfolio project with B2:', error);
-        if (req.file) await fs.unlink(req.file.path).catch(err => console.error(err));
-        res.status(500).json({ error: 'Gagal membuat proyek portofolio.' });
+    // Log error detail ke konsol server (bisa dilihat di log Render.com)
+    console.error('DETAIL ERROR SAAT MEMBUAT PROYEK B2:', error);
+
+    // Hapus file sementara jika ada
+    if (req.file) {
+        await fs.unlink(req.file.path).catch(err => console.error("Gagal hapus file sementara saat error:", err));
     }
+
+    // Kirim pesan error yang LEBIH DETAIL ke frontend.
+    // Ini akan membantu kita melihat masalah sebenarnya di browser.
+    res.status(500).json({
+        error: 'Gagal membuat proyek portofolio.',
+        detail: error.message, // Mengirim pesan error asli dari B2
+        name: error.name      // Mengirim nama error (misal: 'CredentialsProviderError')
+    });
+}
 });
 // ENDPOINT ADMIN: Memperbarui proyek portofolio
 // ENDPOINT ADMIN: Memperbarui proyek portofolio (VERSI PERBAIKAN DENGAN B2)

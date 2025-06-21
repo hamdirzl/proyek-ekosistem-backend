@@ -744,12 +744,12 @@ app.post('/api/admin/portfolio', authenticateAdmin, upload.single('image'), asyn
         const newFileName = `${Date.now()}-${req.file.originalname.replace(/\s+/g, '_')}`;
         const filePathInBucket = `public/${newFileName}`;
 
-        const { error: uploadError } = await supabase.storage.from('portofolio-aset').upload(filePathInBucket, fileContent, { contentType: req.file.mimetype });
+        const { error: uploadError } = await supabase.storage.from('proyek-hamdi-web-2025').upload(filePathInBucket, fileContent, { contentType: req.file.mimetype });
         if (uploadError) throw uploadError;
         
         await fs.unlink(req.file.path);
 
-        const { data: publicUrlData } = supabase.storage.from('portofolio-aset').getPublicUrl(filePathInBucket);
+        const { data: publicUrlData } = supabase.storage.from('proyek-hamdi-web-2025').getPublicUrl(filePathInBucket);
         
         const newProject = await pool.query(
             'INSERT INTO portfolio_projects (title, description, project_link, image_url, image_public_id, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
@@ -784,16 +784,16 @@ app.put('/api/admin/portfolio/:id', authenticateAdmin, upload.single('image'), a
             const newFileName = `${Date.now()}-${req.file.originalname.replace(/\s+/g, '_')}`;
             const newFilePath = `public/${newFileName}`;
 
-            const { error: uploadError } = await supabase.storage.from('portofolio-aset').upload(newFilePath, fileContent, { contentType: req.file.mimetype });
+            const { error: uploadError } = await supabase.storage.from('proyek-hamdi-web-2025').upload(newFilePath, fileContent, { contentType: req.file.mimetype });
             if (uploadError) throw uploadError;
 
             await fs.unlink(req.file.path);
             
             if (imagePath) {
-                await supabase.storage.from('portofolio-aset').remove([imagePath]);
+                await supabase.storage.from('proyek-hamdi-web-2025').remove([imagePath]);
             }
             
-            const { data: publicUrlData } = supabase.storage.from('portofolio-aset').getPublicUrl(newFilePath);
+            const { data: publicUrlData } = supabase.storage.from('proyek-hamdi-web-2025').getPublicUrl(newFilePath);
             imageUrl = publicUrlData.publicUrl;
             imagePath = newFilePath;
         }
@@ -823,7 +823,7 @@ app.delete('/api/admin/portfolio/:id', authenticateAdmin, async (req, res) => {
         const imagePath = projectResult.rows[0].image_public_id;
 
         if (imagePath) {
-            const { error: deleteError } = await supabase.storage.from('portofolio-aset').remove([imagePath]);
+            const { error: deleteError } = await supabase.storage.from('proyek-hamdi-web-2025').remove([imagePath]);
             if (deleteError) console.error("Supabase delete error (ignoring):", deleteError);
         }
 

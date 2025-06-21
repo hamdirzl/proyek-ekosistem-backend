@@ -1,4 +1,4 @@
-// VERSI FINAL DENGAN INTEGRASI SUPABASE STORAGE
+// VERSI FINAL DENGAN INTEGRASI SUPABASE STORAGE (NAMA BUCKET SUDAH DIPERBAIKI)
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -579,8 +579,9 @@ app.post('/api/chat-with-ai', authenticateToken, async (req, res) => {
     }
 });
 
-// === ROUTES PORTOFOLIO (PUBLIK) ===
+// === ROUTES PORTOFOLIO (BARU) ===
 
+// ENDPOINT PUBLIK: Mengambil semua proyek portofolio
 app.get('/api/portfolio', async (req, res) => {
     try {
         const result = await pool.query('SELECT id, title, description, image_url, project_link FROM portfolio_projects ORDER BY created_at DESC');
@@ -591,6 +592,7 @@ app.get('/api/portfolio', async (req, res) => {
     }
 });
 
+// ENDPOINT PUBLIK: Mengambil SATU proyek portofolio berdasarkan ID
 app.get('/api/portfolio/:id', async (req, res) => {
     try {
         const { id } = req.params;
@@ -599,39 +601,16 @@ app.get('/api/portfolio/:id', async (req, res) => {
         if (result.rows.length === 0) {
             return res.status(404).json({ error: 'Proyek tidak ditemukan.' });
         }
+
         res.json(result.rows[0]);
+
     } catch (error) {
         console.error(`Error fetching portfolio project with id ${req.params.id}:`, error);
         res.status(500).json({ error: 'Gagal mengambil data proyek.' });
     }
 });
 
-// === ROUTES JURNAL (PUBLIK) ===
-app.get('/api/jurnal', async (req, res) => {
-    try {
-        const result = await pool.query('SELECT id, title, content, image_url, created_at FROM journal_entries ORDER BY created_at DESC');
-        res.json(result.rows);
-    } catch (error) {
-        console.error('Error fetching journal entries:', error);
-        res.status(500).json({ error: 'Gagal mengambil data jurnal.' });
-    }
-});
-
-app.get('/api/jurnal/:id', async (req, res) => {
-    try {
-        const { id } = req.params;
-        const result = await pool.query('SELECT * FROM journal_entries WHERE id = $1', [id]);
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: 'Entri jurnal tidak ditemukan.' });
-        }
-        res.json(result.rows[0]);
-    } catch (error) {
-        console.error(`Error fetching journal entry with id ${req.params.id}:`, error);
-        res.status(500).json({ error: 'Gagal mengambil data entri jurnal.' });
-    }
-});
-
-// === ROUTES ADMIN (UMUM) ===
+// === ROUTES ADMIN ===
 app.get('/api/links', authenticateAdmin, async (req, res) => {
     try {
         const { search = '' } = req.query;
@@ -741,8 +720,9 @@ app.delete('/api/admin/users/:id', authenticateAdmin, async (req, res) => {
     }
 });
 
-
 // === ROUTES ADMIN PORTOFOLIO (SUPABASE) ===
+
+// ENDPOINT ADMIN: Mengambil SEMUA proyek portofolio (UNTUK PANEL ADMIN)
 app.get('/api/admin/portfolio', authenticateAdmin, async (req, res) => {
     try {
         const result = await pool.query('SELECT * FROM portfolio_projects ORDER BY created_at DESC');
@@ -753,6 +733,7 @@ app.get('/api/admin/portfolio', authenticateAdmin, async (req, res) => {
     }
 });
 
+// ENDPOINT ADMIN: Membuat proyek (Versi Supabase)
 app.post('/api/admin/portfolio', authenticateAdmin, upload.single('image'), async (req, res) => {
     try {
         const { title, description, project_link } = req.body;
@@ -786,6 +767,7 @@ app.post('/api/admin/portfolio', authenticateAdmin, upload.single('image'), asyn
     }
 });
 
+// ENDPOINT ADMIN: Memperbarui proyek portofolio (Versi Supabase)
 app.put('/api/admin/portfolio/:id', authenticateAdmin, upload.single('image'), async (req, res) => {
     try {
         const { id } = req.params;
@@ -833,6 +815,7 @@ app.put('/api/admin/portfolio/:id', authenticateAdmin, upload.single('image'), a
     }
 });
 
+// ENDPOINT ADMIN: Menghapus proyek portofolio (Versi Supabase)
 app.delete('/api/admin/portfolio/:id', authenticateAdmin, async (req, res) => {
     try {
         const { id } = req.params;
@@ -854,122 +837,6 @@ app.delete('/api/admin/portfolio/:id', authenticateAdmin, async (req, res) => {
     } catch (error) {
         console.error('Error deleting portfolio project:', error);
         res.status(500).json({ error: 'Gagal menghapus proyek portofolio.' });
-    }
-});
-
-
-// === ROUTES ADMIN JURNAL (BARU) ===
-app.get('/api/admin/jurnal', authenticateAdmin, async (req, res) => {
-    try {
-        const result = await pool.query('SELECT * FROM journal_entries ORDER BY created_at DESC');
-        res.json(result.rows);
-    } catch (error) {
-        console.error('Error fetching journal entries for admin:', error);
-        res.status(500).json({ error: 'Gagal mengambil data jurnal.' });
-    }
-});
-
-app.post('/api/admin/jurnal', authenticateAdmin, upload.single('image'), async (req, res) => {
-    try {
-        const { title, content } = req.body;
-        if (!req.file || !title || !content) {
-            if (req.file) await fs.unlink(req.file.path);
-            return res.status(400).json({ error: 'Gambar, judul, dan konten wajib diisi.' });
-        }
-
-        const fileContent = await fs.readFile(req.file.path);
-        const newFileName = `jurnal-${Date.now()}-${req.file.originalname.replace(/\s+/g, '_')}`;
-        const filePathInBucket = `public/${newFileName}`;
-
-        const { error: uploadError } = await supabase.storage.from('proyek-hamdi-web-2025').upload(filePathInBucket, fileContent, { contentType: req.file.mimetype });
-        if (uploadError) throw uploadError;
-        
-        await fs.unlink(req.file.path);
-
-        const { data: publicUrlData } = supabase.storage.from('proyek-hamdi-web-2025').getPublicUrl(filePathInBucket);
-        
-        const newEntry = await pool.query(
-            'INSERT INTO journal_entries (title, content, image_url, image_public_id, user_id) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-            [title, content, publicUrlData.publicUrl, filePathInBucket, req.user.id]
-        );
-
-        res.status(201).json(newEntry.rows[0]);
-
-    } catch (error) {
-        console.error('Error creating journal entry:', error);
-        if (req.file) await fs.unlink(req.file.path).catch(err => console.error(err));
-        res.status(500).json({ error: 'Gagal membuat entri jurnal.' });
-    }
-});
-
-app.put('/api/admin/jurnal/:id', authenticateAdmin, upload.single('image'), async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { title, content } = req.body;
-        
-        const oldDataResult = await pool.query('SELECT image_url, image_public_id FROM journal_entries WHERE id = $1', [id]);
-        if (oldDataResult.rows.length === 0) {
-            if (req.file) await fs.unlink(req.file.path).catch(err => console.error(err));
-            return res.status(404).json({ error: 'Entri jurnal tidak ditemukan.' });
-        }
-        
-        let imageUrl = oldDataResult.rows[0].image_url;
-        let imagePath = oldDataResult.rows[0].image_public_id;
-
-        if (req.file) {
-            const fileContent = await fs.readFile(req.file.path);
-            const newFileName = `jurnal-${Date.now()}-${req.file.originalname.replace(/\s+/g, '_')}`;
-            const newFilePath = `public/${newFileName}`;
-
-            const { error: uploadError } = await supabase.storage.from('proyek-hamdi-web-2025').upload(newFilePath, fileContent, { contentType: req.file.mimetype });
-            if (uploadError) throw uploadError;
-
-            await fs.unlink(req.file.path);
-            
-            if (imagePath) {
-                await supabase.storage.from('proyek-hamdi-web-2025').remove([imagePath]);
-            }
-            
-            const { data: publicUrlData } = supabase.storage.from('proyek-hamdi-web-2025').getPublicUrl(newFilePath);
-            imageUrl = publicUrlData.publicUrl;
-            imagePath = newFilePath;
-        }
-
-        const updatedEntry = await pool.query(
-            'UPDATE journal_entries SET title = $1, content = $2, image_url = $3, image_public_id = $4 WHERE id = $5 RETURNING *',
-            [title, content, imageUrl, imagePath, id]
-        );
-
-        res.json(updatedEntry.rows[0]);
-
-    } catch (error) {
-        console.error('Error updating journal entry:', error);
-        if (req.file) await fs.unlink(req.file.path).catch(err => console.error(err));
-        res.status(500).json({ error: 'Gagal memperbarui entri jurnal.' });
-    }
-});
-
-app.delete('/api/admin/jurnal/:id', authenticateAdmin, async (req, res) => {
-    try {
-        const { id } = req.params;
-        
-        const entryResult = await pool.query('SELECT image_public_id FROM journal_entries WHERE id = $1', [id]);
-        if (entryResult.rows.length === 0) {
-            return res.status(404).json({ error: 'Entri jurnal tidak ditemukan.' });
-        }
-        const imagePath = entryResult.rows[0].image_public_id;
-
-        if (imagePath) {
-            const { error: deleteError } = await supabase.storage.from('proyek-hamdi-web-2025').remove([imagePath]);
-            if (deleteError) console.error("Supabase delete error (ignoring):", deleteError);
-        }
-
-        await pool.query('DELETE FROM journal_entries WHERE id = $1', [id]);
-
-        res.status(200).json({ message: 'Entri jurnal berhasil dihapus.' });
-    } catch (error) {
-        console.error('Error deleting journal entry:', error);
-        res.status(500).json({ error: 'Gagal menghapus entri jurnal.' });
     }
 });
 

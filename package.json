@@ -12,6 +12,8 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.832.0",
+    "@google/generative-ai": "^0.15.0",
     "bcrypt": "^5.1.1",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
@@ -23,8 +25,7 @@
     "pdf-lib": "^1.17.1",
     "pg": "^8.16.0",
     "qrcode": "^1.5.3",
-    "sharp": "^0.33.4",
-    "@google/generative-ai": "^0.15.0"
+    "sharp": "^0.33.4"
   },
   "devDependencies": {
     "nodemon": "^3.1.10"

@@ -14,6 +14,17 @@ const { PDFDocument } = require('pdf-lib');
 const QRCode = require('qrcode');
 const sharp = require('sharp');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { S3Client, PutObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
+
+// Konfigurasi Client untuk menunjuk ke Backblaze B2
+const s3Client = new S3Client({
+    endpoint: `https://${process.env.B2_ENDPOINT}`,
+    region: process.env.B2_ENDPOINT.split('.')[1], // Otomatis mengambil region
+    credentials: {
+        accessKeyId: process.env.B2_KEY_ID,
+        secretAccessKey: process.env.B2_APPLICATION_KEY
+    }
+});
 
 // === KONFIGURASI DATABASE ===
 const pool = new Pool({
@@ -716,33 +727,30 @@ app.delete('/api/admin/users/:id', authenticateAdmin, async (req, res) => {
 
 
 // === ROUTES ADMIN PORTOFOLIO (BARU) ===
-
-// ENDPOINT ADMIN: Mengambil semua proyek untuk manajemen
-app.get('/api/admin/portfolio', authenticateAdmin, async (req, res) => {
-    try {
-        const result = await pool.query('SELECT * FROM portfolio_projects ORDER BY created_at DESC');
-        res.json(result.rows);
-    } catch (error) {
-        console.error('Error fetching portfolio for admin:', error);
-        res.status(500).json({ error: 'Gagal mengambil data portofolio untuk admin.' });
-    }
-});
-
-// ENDPOINT ADMIN: Membuat proyek portofolio baru
+// ENDPOINT ADMIN: Membuat proyek (VERSI B2 PRIVATE PROXY)
 app.post('/api/admin/portfolio', authenticateAdmin, upload.single('image'), async (req, res) => {
     try {
         const { title, description, project_link } = req.body;
         if (!req.file || !title || !description) {
-            if (req.file) await fs.unlink(req.file.path).catch(err => console.error(err));
+            if (req.file) await fs.unlink(req.file.path);
             return res.status(400).json({ error: 'Gambar, judul, dan deskripsi wajib diisi.' });
         }
 
-        const tempPath = req.file.path;
+        const fileContent = await fs.readFile(req.file.path);
         const newFileName = `${Date.now()}-${req.file.originalname.replace(/\s+/g, '_')}`;
-        const publicPath = path.join(__dirname, 'public', 'uploads', newFileName);
-        await fs.rename(tempPath, publicPath);
-        
-        const imageUrl = `/public/uploads/${newFileName}`;
+
+        const uploadParams = {
+            Bucket: process.env.B2_BUCKET_NAME,
+            Key: newFileName,
+            Body: fileContent,
+            ContentType: req.file.mimetype
+        };
+
+        await s3Client.send(new PutObjectCommand(uploadParams));
+        await fs.unlink(req.file.path);
+
+        // PENTING: Simpan HANYA nama filenya ke database
+        const imageUrl = newFileName; 
 
         const newProject = await pool.query(
             'INSERT INTO portfolio_projects (title, description, project_link, image_url, user_id) VALUES ($1, $2, $3, $4, $5) RETURNING *',
@@ -752,12 +760,11 @@ app.post('/api/admin/portfolio', authenticateAdmin, upload.single('image'), asyn
         res.status(201).json(newProject.rows[0]);
 
     } catch (error) {
-        console.error('Error creating portfolio project:', error);
+        console.error('Error creating portfolio project with B2:', error);
         if (req.file) await fs.unlink(req.file.path).catch(err => console.error(err));
         res.status(500).json({ error: 'Gagal membuat proyek portofolio.' });
     }
 });
-
 // ENDPOINT ADMIN: Memperbarui proyek portofolio
 app.put('/api/admin/portfolio/:id', authenticateAdmin, upload.single('image'), async (req, res) => {
     try {
@@ -840,6 +847,29 @@ app.get('/:slug', async (req, res) => {
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
+    }
+});
+
+// RUTE BARU: Proxy untuk mengambil gambar private dari B2
+app.get('/api/images/:key', async (req, res) => {
+    try {
+        const { key } = req.params;
+        const downloadParams = {
+            Bucket: process.env.B2_BUCKET_NAME,
+            Key: key
+        };
+
+        // Ambil objek dari B2
+        const command = new GetObjectCommand(downloadParams);
+        const { Body, ContentType } = await s3Client.send(command);
+
+        // Kirim gambar ke browser
+        res.setHeader('Content-Type', ContentType);
+        Body.pipe(res);
+
+    } catch (error) {
+        console.error("Gagal mengambil gambar dari B2:", error);
+        res.status(404).json({ error: 'Gambar tidak ditemukan.' });
     }
 });
 

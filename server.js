@@ -17,15 +17,12 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require("@aws-sdk/client-s3");
 
 // Konfigurasi Client untuk menunjuk ke Backblaze B2
-// server.js
-
-console.log("!!! MENGGUNAKAN KREDENSIAL HARDCODED UNTUK TES !!!"); // Penanda di log
 const s3Client = new S3Client({
-    endpoint: 'https://s3.us-east-005.backblazeb2.com',
-    region: 'us-east-005',
+    endpoint: `https://${process.env.B2_ENDPOINT}`,
+    region: process.env.B2_ENDPOINT.split('.')[1], // Otomatis mengambil region
     credentials: {
-        accessKeyId: '005bddf929bcff5000000002',
-        secretAccessKey: 'K005tKb6Ww6YNM+VZWWkMBHpxIINFks'
+        accessKeyId: process.env.B2_KEY_ID,
+        secretAccessKey: process.env.B2_APPLICATION_KEY
     }
 });
 

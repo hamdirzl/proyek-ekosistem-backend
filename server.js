@@ -16,6 +16,14 @@ const sharp = require('sharp');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require("@aws-sdk/client-s3");
 
+// Tambahkan blok ini untuk debugging
+console.log("--- MEMERIKSA ENVIRONMENT VARIABLES ---");
+console.log("B2_ENDPOINT:", process.env.B2_ENDPOINT);
+console.log("B2_KEY_ID:", process.env.B2_KEY_ID);
+console.log("B2_APPLICATION_KEY:", process.env.B2_APPLICATION_KEY);
+console.log("B2_BUCKET_NAME:", process.env.B2_BUCKET_NAME);
+console.log("------------------------------------");
+
 // Konfigurasi Client untuk menunjuk ke Backblaze B2
 const s3Client = new S3Client({
     endpoint: `https://${process.env.B2_ENDPOINT}`,

@@ -841,6 +841,159 @@ app.delete('/api/admin/portfolio/:id', authenticateAdmin, async (req, res) => {
 });
 
 
+// === ROUTES JURNAL (BARU) ===
+
+// ENDPOINT PUBLIK: Mengambil semua postingan jurnal
+app.get('/api/jurnal', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT id, title, content, image_url, created_at FROM jurnal_posts ORDER BY created_at DESC');
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Error fetching jurnal posts:', error);
+        res.status(500).json({ error: 'Gagal mengambil data jurnal.' });
+    }
+});
+
+// ENDPOINT PUBLIK: Mengambil SATU postingan jurnal berdasarkan ID
+// (Catatan: Anda mungkin memerlukan ini nanti jika membuat halaman detail jurnal)
+app.get('/api/jurnal/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await pool.query('SELECT id, title, content, image_url, created_at FROM jurnal_posts WHERE id = $1', [id]);
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Postingan jurnal tidak ditemukan.' });
+        }
+        res.json(result.rows[0]);
+    } catch (error) {
+        console.error(`Error fetching jurnal post with id ${req.params.id}:`, error);
+        res.status(500).json({ error: 'Gagal mengambil data postingan jurnal.' });
+    }
+});
+
+
+// === ROUTES ADMIN JURNAL (BARU) ===
+
+// ENDPOINT ADMIN: Mengambil SEMUA postingan jurnal (UNTUK PANEL ADMIN)
+app.get('/api/admin/jurnal', authenticateAdmin, async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM jurnal_posts ORDER BY created_at DESC');
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Error fetching all jurnal posts for admin:', error);
+        res.status(500).json({ error: 'Gagal mengambil data jurnal untuk admin.' });
+    }
+});
+
+// ENDPOINT ADMIN: Membuat postingan jurnal baru
+app.post('/api/admin/jurnal', authenticateAdmin, upload.single('image'), async (req, res) => {
+    try {
+        const { title, content } = req.body;
+        if (!req.file || !title || !content) {
+            if (req.file) await fs.unlink(req.file.path);
+            return res.status(400).json({ error: 'Gambar, judul, dan konten wajib diisi.' });
+        }
+
+        const fileContent = await fs.readFile(req.file.path);
+        // Menyimpan gambar jurnal di dalam subfolder 'jurnal' di bucket Supabase
+        const newFileName = `jurnal/${Date.now()}-${req.file.originalname.replace(/\s+/g, '_')}`;
+        const filePathInBucket = `public/${newFileName}`;
+
+        const { error: uploadError } = await supabase.storage.from('proyek-hamdi-web-2025').upload(filePathInBucket, fileContent, { contentType: req.file.mimetype });
+        if (uploadError) throw uploadError;
+        
+        await fs.unlink(req.file.path);
+
+        const { data: publicUrlData } = supabase.storage.from('proyek-hamdi-web-2025').getPublicUrl(filePathInBucket);
+        
+        const newPost = await pool.query(
+            'INSERT INTO jurnal_posts (title, content, image_url, image_public_id, user_id) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+            [title, content, publicUrlData.publicUrl, filePathInBucket, req.user.id]
+        );
+
+        res.status(201).json(newPost.rows[0]);
+
+    } catch (error) {
+        console.error('Error creating jurnal post with Supabase:', error);
+        if (req.file) await fs.unlink(req.file.path).catch(err => console.error(err));
+        res.status(500).json({ error: 'Gagal membuat postingan jurnal.' });
+    }
+});
+
+// ENDPOINT ADMIN: Memperbarui postingan jurnal
+app.put('/api/admin/jurnal/:id', authenticateAdmin, upload.single('image'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { title, content } = req.body;
+        
+        const oldDataResult = await pool.query('SELECT image_url, image_public_id FROM jurnal_posts WHERE id = $1', [id]);
+        if (oldDataResult.rows.length === 0) {
+            if (req.file) await fs.unlink(req.file.path).catch(err => console.error(err));
+            return res.status(404).json({ error: 'Postingan tidak ditemukan.' });
+        }
+        
+        let imageUrl = oldDataResult.rows[0].image_url;
+        let imagePath = oldDataResult.rows[0].image_public_id;
+
+        if (req.file) { // Jika ada file gambar baru yang di-upload
+            const fileContent = await fs.readFile(req.file.path);
+            const newFileName = `jurnal/${Date.now()}-${req.file.originalname.replace(/\s+/g, '_')}`;
+            const newFilePath = `public/${newFileName}`;
+
+            const { error: uploadError } = await supabase.storage.from('proyek-hamdi-web-2025').upload(newFilePath, fileContent, { contentType: req.file.mimetype });
+            if (uploadError) throw uploadError;
+
+            await fs.unlink(req.file.path);
+            
+            if (imagePath) {
+                await supabase.storage.from('proyek-hamdi-web-2025').remove([imagePath]);
+            }
+            
+            const { data: publicUrlData } = supabase.storage.from('proyek-hamdi-web-2025').getPublicUrl(newFilePath);
+            imageUrl = publicUrlData.publicUrl;
+            imagePath = newFilePath;
+        }
+
+        const updatedPost = await pool.query(
+            'UPDATE jurnal_posts SET title = $1, content = $2, image_url = $3, image_public_id = $4 WHERE id = $5 RETURNING *',
+            [title, content, imageUrl, imagePath, id]
+        );
+
+        res.json(updatedPost.rows[0]);
+
+    } catch (error) {
+        console.error('Error updating jurnal post:', error);
+        if (req.file) await fs.unlink(req.file.path).catch(err => console.error(err));
+        res.status(500).json({ error: 'Gagal memperbarui postingan jurnal.' });
+    }
+});
+
+// ENDPOINT ADMIN: Menghapus postingan jurnal
+app.delete('/api/admin/jurnal/:id', authenticateAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const postResult = await pool.query('SELECT image_public_id FROM jurnal_posts WHERE id = $1', [id]);
+        if (postResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Postingan tidak ditemukan.' });
+        }
+        const imagePath = postResult.rows[0].image_public_id;
+
+        if (imagePath) {
+            const { error: deleteError } = await supabase.storage.from('proyek-hamdi-web-2025').remove([imagePath]);
+            if (deleteError) console.error("Supabase delete error (ignoring):", deleteError);
+        }
+
+        await pool.query('DELETE FROM jurnal_posts WHERE id = $1', [id]);
+
+        res.status(200).json({ message: 'Postingan jurnal berhasil dihapus.' });
+    } catch (error) {
+        console.error('Error deleting jurnal post:', error);
+        res.status(500).json({ error: 'Gagal menghapus postingan jurnal.' });
+    }
+});
+
+
+
 // === ROOT ROUTE ===
 app.get('/', (req, res) => res.send('Halo dari Backend Server Node.js! Terhubung ke PostgreSQL.'));
 

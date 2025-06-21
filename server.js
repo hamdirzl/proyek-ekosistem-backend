@@ -1,4 +1,4 @@
-// VERSI FINAL DENGAN INTEGRASI SUPABASE STORAGE
+// VERSI FINAL DENGAN INTEGRASI SUPABASE STORAGE (NAMA BUCKET SUDAH DIPERBAIKI)
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -19,7 +19,6 @@ const { createClient } = require('@supabase/supabase-js');
 
 // Inisialisasi Supabase Client
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
-
 
 // === KONFIGURASI DATABASE ===
 const pool = new Pool({
@@ -90,6 +89,7 @@ fs.mkdir(path.join(__dirname, 'public', 'uploads'), { recursive: true }).catch(c
 
 // === ROUTES ===
 
+// ... (semua rute lain dari atas sampai sebelum rute portofolio tetap sama)
 // Autentikasi dan Registrasi
 app.post('/api/register', async (req, res) => {
     try {
@@ -592,7 +592,7 @@ app.get('/api/portfolio', async (req, res) => {
     }
 });
 
-// 2. ENDPOINT PUBLIK: Mengambil SATU proyek portofolio berdasarkan ID (DI BAWAHNYA)
+// ENDPOINT PUBLIK: Mengambil SATU proyek portofolio berdasarkan ID
 app.get('/api/portfolio/:id', async (req, res) => {
     try {
         const { id } = req.params;
@@ -720,8 +720,9 @@ app.delete('/api/admin/users/:id', authenticateAdmin, async (req, res) => {
     }
 });
 
+// === ROUTES ADMIN PORTOFOLIO (SUPABASE) ===
 
-// === ROUTES ADMIN PORTOFOLIO (BARU) ===
+// ENDPOINT ADMIN: Mengambil SEMUA proyek portofolio (UNTUK PANEL ADMIN)
 app.get('/api/admin/portfolio', authenticateAdmin, async (req, res) => {
     try {
         const result = await pool.query('SELECT * FROM portfolio_projects ORDER BY created_at DESC');
@@ -732,6 +733,7 @@ app.get('/api/admin/portfolio', authenticateAdmin, async (req, res) => {
     }
 });
 
+// ENDPOINT ADMIN: Membuat proyek (Versi Supabase)
 app.post('/api/admin/portfolio', authenticateAdmin, upload.single('image'), async (req, res) => {
     try {
         const { title, description, project_link } = req.body;
@@ -765,6 +767,7 @@ app.post('/api/admin/portfolio', authenticateAdmin, upload.single('image'), asyn
     }
 });
 
+// ENDPOINT ADMIN: Memperbarui proyek portofolio (Versi Supabase)
 app.put('/api/admin/portfolio/:id', authenticateAdmin, upload.single('image'), async (req, res) => {
     try {
         const { id } = req.params;
@@ -812,6 +815,7 @@ app.put('/api/admin/portfolio/:id', authenticateAdmin, upload.single('image'), a
     }
 });
 
+// ENDPOINT ADMIN: Menghapus proyek portofolio (Versi Supabase)
 app.delete('/api/admin/portfolio/:id', authenticateAdmin, async (req, res) => {
     try {
         const { id } = req.params;

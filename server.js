@@ -1,3 +1,4 @@
+// VERSI FINAL DENGAN INTEGRASI SUPABASE STORAGE
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -14,25 +15,11 @@ const { PDFDocument } = require('pdf-lib');
 const QRCode = require('qrcode');
 const sharp = require('sharp');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
-const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require("@aws-sdk/client-s3");
+const { createClient } = require('@supabase/supabase-js');
 
-// Tambahkan blok ini untuk debugging
-console.log("--- MEMERIKSA ENVIRONMENT VARIABLES ---");
-console.log("B2_ENDPOINT:", process.env.B2_ENDPOINT);
-console.log("B2_KEY_ID:", process.env.B2_KEY_ID);
-console.log("B2_APPLICATION_KEY:", process.env.B2_APPLICATION_KEY);
-console.log("B2_BUCKET_NAME:", process.env.B2_BUCKET_NAME);
-console.log("------------------------------------");
+// Inisialisasi Supabase Client
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
-// Konfigurasi Client untuk menunjuk ke Backblaze B2
-const s3Client = new S3Client({
-    endpoint: `https://${process.env.B2_ENDPOINT}`,
-    region: process.env.B2_ENDPOINT.split('.')[1], // Otomatis mengambil region
-    credentials: {
-        accessKeyId: process.env.B2_KEY_ID,
-        secretAccessKey: process.env.B2_APPLICATION_KEY
-    }
-});
 
 // === KONFIGURASI DATABASE ===
 const pool = new Pool({
@@ -735,10 +722,8 @@ app.delete('/api/admin/users/:id', authenticateAdmin, async (req, res) => {
 
 
 // === ROUTES ADMIN PORTOFOLIO (BARU) ===
-// ENDPOINT ADMIN: Mengambil SEMUA proyek portofolio (UNTUK PANEL ADMIN)
 app.get('/api/admin/portfolio', authenticateAdmin, async (req, res) => {
     try {
-        // Ambil semua proyek dari database, urutkan dari yang terbaru
         const result = await pool.query('SELECT * FROM portfolio_projects ORDER BY created_at DESC');
         res.json(result.rows);
     } catch (error) {
@@ -747,7 +732,6 @@ app.get('/api/admin/portfolio', authenticateAdmin, async (req, res) => {
     }
 });
 
-// ENDPOINT ADMIN: Membuat proyek (VERSI B2 PRIVATE PROXY)
 app.post('/api/admin/portfolio', authenticateAdmin, upload.single('image'), async (req, res) => {
     try {
         const { title, description, project_link } = req.body;
@@ -758,113 +742,92 @@ app.post('/api/admin/portfolio', authenticateAdmin, upload.single('image'), asyn
 
         const fileContent = await fs.readFile(req.file.path);
         const newFileName = `${Date.now()}-${req.file.originalname.replace(/\s+/g, '_')}`;
+        const filePathInBucket = `public/${newFileName}`;
 
-        const uploadParams = {
-            Bucket: process.env.B2_BUCKET_NAME,
-            Key: newFileName,
-            Body: fileContent,
-            ContentType: req.file.mimetype
-        };
-
-        await s3Client.send(new PutObjectCommand(uploadParams));
+        const { error: uploadError } = await supabase.storage.from('portofolio-aset').upload(filePathInBucket, fileContent, { contentType: req.file.mimetype });
+        if (uploadError) throw uploadError;
+        
         await fs.unlink(req.file.path);
 
-        // PENTING: Simpan HANYA nama filenya ke database
-        const imageUrl = newFileName; 
-
+        const { data: publicUrlData } = supabase.storage.from('portofolio-aset').getPublicUrl(filePathInBucket);
+        
         const newProject = await pool.query(
-            'INSERT INTO portfolio_projects (title, description, project_link, image_url, user_id) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-            [title, description, project_link || null, imageUrl, req.user.id]
+            'INSERT INTO portfolio_projects (title, description, project_link, image_url, image_public_id, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+            [title, description, project_link || null, publicUrlData.publicUrl, filePathInBucket, req.user.id]
         );
 
         res.status(201).json(newProject.rows[0]);
 
     } catch (error) {
-        console.error('Error creating portfolio project with B2:', error);
+        console.error('Error creating portfolio project with Supabase:', error);
         if (req.file) await fs.unlink(req.file.path).catch(err => console.error(err));
         res.status(500).json({ error: 'Gagal membuat proyek portofolio.' });
     }
 });
-// ENDPOINT ADMIN: Memperbarui proyek portofolio
 
-// Ganti blok PUT yang lama dengan yang ini
 app.put('/api/admin/portfolio/:id', authenticateAdmin, upload.single('image'), async (req, res) => {
     try {
         const { id } = req.params;
         const { title, description, project_link } = req.body;
         
-        // Cek apakah proyek ada
-        const oldDataResult = await pool.query('SELECT image_url FROM portfolio_projects WHERE id = $1', [id]);
+        const oldDataResult = await pool.query('SELECT image_url, image_public_id FROM portfolio_projects WHERE id = $1', [id]);
         if (oldDataResult.rows.length === 0) {
             if (req.file) await fs.unlink(req.file.path).catch(err => console.error(err));
             return res.status(404).json({ error: 'Proyek tidak ditemukan.' });
         }
         
         let imageUrl = oldDataResult.rows[0].image_url;
+        let imagePath = oldDataResult.rows[0].image_public_id;
 
-        // Jika ada file gambar baru yang diunggah
         if (req.file) {
-            // 1. Upload gambar baru ke B2
             const fileContent = await fs.readFile(req.file.path);
             const newFileName = `${Date.now()}-${req.file.originalname.replace(/\s+/g, '_')}`;
-            const uploadParams = {
-                Bucket: process.env.B2_BUCKET_NAME,
-                Key: newFileName,
-                Body: fileContent,
-                ContentType: req.file.mimetype
-            };
-            await s3Client.send(new PutObjectCommand(uploadParams));
-            await fs.unlink(req.file.path); // Hapus file sementara
+            const newFilePath = `public/${newFileName}`;
+
+            const { error: uploadError } = await supabase.storage.from('portofolio-aset').upload(newFilePath, fileContent, { contentType: req.file.mimetype });
+            if (uploadError) throw uploadError;
+
+            await fs.unlink(req.file.path);
             
-            // 2. Hapus gambar lama dari B2 jika ada
-            if (imageUrl) {
-                const deleteParams = { Bucket: process.env.B2_BUCKET_NAME, Key: imageUrl };
-                await s3Client.send(new DeleteObjectCommand(deleteParams));
+            if (imagePath) {
+                await supabase.storage.from('portofolio-aset').remove([imagePath]);
             }
             
-            // 3. Gunakan nama file baru untuk disimpan ke DB
-            imageUrl = newFileName;
+            const { data: publicUrlData } = supabase.storage.from('portofolio-aset').getPublicUrl(newFilePath);
+            imageUrl = publicUrlData.publicUrl;
+            imagePath = newFilePath;
         }
 
-        // Update data di database
         const updatedProject = await pool.query(
-            'UPDATE portfolio_projects SET title = $1, description = $2, project_link = $3, image_url = $4 WHERE id = $5 RETURNING *',
-            [title, description, project_link || null, imageUrl, id]
+            'UPDATE portfolio_projects SET title = $1, description = $2, project_link = $3, image_url = $4, image_public_id = $5 WHERE id = $6 RETURNING *',
+            [title, description, project_link || null, imageUrl, imagePath, id]
         );
 
         res.json(updatedProject.rows[0]);
 
     } catch (error) {
         console.error('Error updating portfolio project:', error);
-        if (req.file) await fs.unlink(req.file.path).catch(err => console.error("Gagal hapus file temp saat error:", err));
+        if (req.file) await fs.unlink(req.file.path).catch(err => console.error(err));
         res.status(500).json({ error: 'Gagal memperbarui proyek portofolio.' });
     }
 });
 
-// ENDPOINT ADMIN: Menghapus proyek portofolio
 app.delete('/api/admin/portfolio/:id', authenticateAdmin, async (req, res) => {
     try {
         const { id } = req.params;
-
-        // 1. Ambil nama file gambar (Key) dari database
-        const projectResult = await pool.query('SELECT image_url FROM portfolio_projects WHERE id = $1', [id]);
+        
+        const projectResult = await pool.query('SELECT image_public_id FROM portfolio_projects WHERE id = $1', [id]);
         if (projectResult.rows.length === 0) {
             return res.status(404).json({ error: 'Proyek tidak ditemukan.' });
         }
-        const imageKey = projectResult.rows[0].image_url;
+        const imagePath = projectResult.rows[0].image_public_id;
 
-        // 2. Hapus entri dari database
-        await pool.query('DELETE FROM portfolio_projects WHERE id = $1', [id]);
-
-        // 3. Jika ada nama file gambar, hapus objek dari Backblaze B2
-        if (imageKey) {
-            const deleteParams = {
-                Bucket: process.env.B2_BUCKET_NAME,
-                Key: imageKey,
-            };
-            await s3Client.send(new DeleteObjectCommand(deleteParams));
-            console.log(`Successfully deleted ${imageKey} from B2.`);
+        if (imagePath) {
+            const { error: deleteError } = await supabase.storage.from('portofolio-aset').remove([imagePath]);
+            if (deleteError) console.error("Supabase delete error (ignoring):", deleteError);
         }
+
+        await pool.query('DELETE FROM portfolio_projects WHERE id = $1', [id]);
 
         res.status(200).json({ message: 'Proyek berhasil dihapus.' });
     } catch (error) {
@@ -891,29 +854,6 @@ app.get('/:slug', async (req, res) => {
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
-    }
-});
-
-// RUTE BARU: Proxy untuk mengambil gambar private dari B2
-app.get('/api/images/:key', async (req, res) => {
-    try {
-        const { key } = req.params;
-        const downloadParams = {
-            Bucket: process.env.B2_BUCKET_NAME,
-            Key: key
-        };
-
-        // Ambil objek dari B2
-        const command = new GetObjectCommand(downloadParams);
-        const { Body, ContentType } = await s3Client.send(command);
-
-        // Kirim gambar ke browser
-        res.setHeader('Content-Type', ContentType);
-        Body.pipe(res);
-
-    } catch (error) {
-        console.error("Gagal mengambil gambar dari B2:", error);
-        res.status(404).json({ error: 'Gambar tidak ditemukan.' });
     }
 });
 

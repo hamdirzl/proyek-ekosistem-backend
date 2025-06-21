@@ -1,4 +1,4 @@
-// VERSI FINAL - PERBAIKAN PADA RUTE DETAIL JURNAL
+// VERSI FINAL DENGAN INTEGRASI SUPABASE STORAGE
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -84,11 +84,12 @@ app.use('/public', express.static(path.join(__dirname, 'public')));
 
 const upload = multer({ dest: 'uploads/' });
 fs.mkdir('uploads', { recursive: true }).catch(console.error);
-fs.mkdir(path.join(__dirname, 'public', 'uploads'), { recursive: true }).catch(console.error); 
+fs.mkdir(path.join(__dirname, 'public', 'uploads'), { recursive: true }).catch(console.error); // Pastikan folder public ada
 
 
 // === ROUTES ===
 
+// ... (semua rute lain dari atas sampai sebelum rute portofolio tetap sama)
 // Autentikasi dan Registrasi
 app.post('/api/register', async (req, res) => {
     try {
@@ -265,6 +266,7 @@ app.post('/api/reset-password', async (req, res) => {
 });
 
 // === ROUTES PENGGUNA & PERKAKAS ===
+
 app.post('/api/shorten', authenticateToken, async (req, res) => {
     try {
         const { original_url, custom_slug } = req.body;
@@ -578,6 +580,7 @@ app.post('/api/chat-with-ai', authenticateToken, async (req, res) => {
 });
 
 // === ROUTES PORTOFOLIO (PUBLIK) ===
+
 app.get('/api/portfolio', async (req, res) => {
     try {
         const result = await pool.query('SELECT id, title, description, image_url, project_link FROM portfolio_projects ORDER BY created_at DESC');
@@ -592,6 +595,7 @@ app.get('/api/portfolio/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const result = await pool.query('SELECT id, title, description, image_url, project_link, created_at FROM portfolio_projects WHERE id = $1', [id]);
+
         if (result.rows.length === 0) {
             return res.status(404).json({ error: 'Proyek tidak ditemukan.' });
         }
@@ -601,7 +605,6 @@ app.get('/api/portfolio/:id', async (req, res) => {
         res.status(500).json({ error: 'Gagal mengambil data proyek.' });
     }
 });
-
 
 // === ROUTES JURNAL (PUBLIK) ===
 app.get('/api/jurnal', async (req, res) => {
@@ -614,7 +617,6 @@ app.get('/api/jurnal', async (req, res) => {
     }
 });
 
-// ENDPOINT PUBLIK: Mengambil SATU entri jurnal berdasarkan ID
 app.get('/api/jurnal/:id', async (req, res) => {
     try {
         const { id } = req.params;
@@ -856,7 +858,7 @@ app.delete('/api/admin/portfolio/:id', authenticateAdmin, async (req, res) => {
 });
 
 
-// === ROUTES ADMIN JURNAL (SUPABASE) ===
+// === ROUTES ADMIN JURNAL (BARU) ===
 app.get('/api/admin/jurnal', authenticateAdmin, async (req, res) => {
     try {
         const result = await pool.query('SELECT * FROM journal_entries ORDER BY created_at DESC');
@@ -972,9 +974,10 @@ app.delete('/api/admin/jurnal/:id', authenticateAdmin, async (req, res) => {
 });
 
 
-// === ROOT ROUTE DAN WILDCARD ===
+// === ROOT ROUTE ===
 app.get('/', (req, res) => res.send('Halo dari Backend Server Node.js! Terhubung ke PostgreSQL.'));
 
+// === WILDCARD REDIRECT ROUTE ===
 app.get('/:slug', async (req, res) => {
     try {
         const { slug } = req.params;

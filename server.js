@@ -653,14 +653,11 @@ app.get('/api/admin/users', authenticateAdmin, async (req, res) => {
         const { search = '' } = req.query;
         const searchTerm = `%${search}%`;
 
-        const result = await pool.query(
-            'SELECT id, email, role, created_at FROM users WHERE email ILIKE $1 ORDER BY created_at DESC',
-            [searchTerm]
-        );
+          const result = await pool.query('SELECT * FROM portfolio_projects ORDER BY created_at DESC');
         res.json(result.rows);
     } catch (error) {
-        console.error('Error fetching all users for admin:', error);
-        res.status(500).json({ error: 'Failed to fetch user list.' });
+        console.error('Error fetching admin portfolio projects:', error);
+        res.status(500).json({ error: 'Gagal mengambil data portofolio admin.' });
     }
 });
 

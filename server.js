@@ -14,15 +14,18 @@ const { PDFDocument } = require('pdf-lib');
 const QRCode = require('qrcode');
 const sharp = require('sharp');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
-const { S3Client, PutObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
+const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require("@aws-sdk/client-s3");
 
 // Konfigurasi Client untuk menunjuk ke Backblaze B2
+// server.js
+
+console.log("!!! MENGGUNAKAN KREDENSIAL HARDCODED UNTUK TES !!!"); // Penanda di log
 const s3Client = new S3Client({
-    endpoint: `https://${process.env.B2_ENDPOINT}`,
-    region: process.env.B2_ENDPOINT.split('.')[1], // Otomatis mengambil region
+    endpoint: 'https://s3.us-east-005.backblazeb2.com',
+    region: 'us-east-005',
     credentials: {
-        accessKeyId: process.env.B2_KEY_ID,
-        secretAccessKey: process.env.B2_APPLICATION_KEY
+        accessKeyId: '005bddf929bcff5000000002',
+        secretAccessKey: 'K005tKb6Ww6YNM+VZWWkMBHpxIINFks'
     }
 });
 
@@ -837,18 +840,25 @@ app.put('/api/admin/portfolio/:id', authenticateAdmin, upload.single('image'), a
 app.delete('/api/admin/portfolio/:id', authenticateAdmin, async (req, res) => {
     try {
         const { id } = req.params;
-        
+
+        // 1. Ambil nama file gambar (Key) dari database
         const projectResult = await pool.query('SELECT image_url FROM portfolio_projects WHERE id = $1', [id]);
         if (projectResult.rows.length === 0) {
             return res.status(404).json({ error: 'Proyek tidak ditemukan.' });
         }
-        const imageUrl = projectResult.rows[0].image_url;
-        
+        const imageKey = projectResult.rows[0].image_url;
+
+        // 2. Hapus entri dari database
         await pool.query('DELETE FROM portfolio_projects WHERE id = $1', [id]);
 
-        if (imageUrl) {
-            const imagePath = path.join(__dirname, imageUrl);
-            await fs.unlink(imagePath).catch(err => console.log(`Gagal menghapus file: ${err.message}`));
+        // 3. Jika ada nama file gambar, hapus objek dari Backblaze B2
+        if (imageKey) {
+            const deleteParams = {
+                Bucket: process.env.B2_BUCKET_NAME,
+                Key: imageKey,
+            };
+            await s3Client.send(new DeleteObjectCommand(deleteParams));
+            console.log(`Successfully deleted ${imageKey} from B2.`);
         }
 
         res.status(200).json({ message: 'Proyek berhasil dihapus.' });

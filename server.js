@@ -1,4 +1,4 @@
-// VERSI FINAL DENGAN INTEGRASI SUPABASE STORAGE & LIVE CHAT (FIX TERAKHIR UNTUK REFERENCE ERROR)
+// VERSI FINAL DAN LENGKAP - DENGAN INTEGRASI SUPABASE STORAGE & LIVE CHAT (PERSISTENT)
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -17,7 +17,7 @@ const sharp = require('sharp');
 const { createClient } = require('@supabase/supabase-js');
 const sanitizeHtml = require('sanitize-html');
 const http = require('http');
-const WebSocket = require('ws'); // [FIX] Mengimpor seluruh library 'ws'
+const WebSocket = require('ws');
 const axios = require('axios');
 
 // Inisialisasi Supabase Client
@@ -105,8 +105,6 @@ fs.mkdir('uploads', { recursive: true }).catch(console.error);
 fs.mkdir(path.join(__dirname, 'public', 'uploads'), { recursive: true }).catch(console.error);
 
 // === ROUTES ===
-// ... (SEMUA RUTE DARI /api/register HINGGA /api/admin/jurnal/:id TETAP SAMA PERSIS)
-// Autentikasi dan Registrasi
 app.post('/api/register', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -915,7 +913,6 @@ app.get('/api/admin/chat/history/:conversationId', authenticateAdmin, async (req
     }
 });
 
-// ENDPOINT WEBHOOK TELEGRAM
 app.post('/api/telegram/webhook', (req, res) => {
     const { message } = req.body;
 
@@ -954,6 +951,26 @@ app.post('/api/telegram/webhook', (req, res) => {
 
 app.get('/', (req, res) => res.send('Halo dari Backend Server Node.js! Terhubung ke PostgreSQL.'));
 
+// [BARU] Endpoint untuk mengambil riwayat chat publik
+// PENTING: letakkan sebelum app.get('/:slug', ...)
+app.get('/api/chat/history/:conversationId', async (req, res) => {
+    try {
+        const { conversationId } = req.params;
+        // Validasi format UUID untuk keamanan dasar
+        if (!/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(conversationId)) {
+            return res.status(400).json({ error: 'Format ID percakapan tidak valid.' });
+        }
+        const result = await pool.query(
+            'SELECT sender_type, content, created_at FROM chat_messages WHERE conversation_id = $1 ORDER BY created_at ASC',
+            [conversationId]
+        );
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Error fetching public chat history:', error);
+        res.status(500).json({ error: 'Gagal mengambil riwayat percakapan.' });
+    }
+});
+
 app.get('/:slug', async (req, res) => {
     try {
         const { slug } = req.params;
@@ -972,13 +989,7 @@ app.get('/:slug', async (req, res) => {
 
 const server = http.createServer(app);
 
-const allowedOrigins = [
-  'https://hamdirzl.my.id', 
-  'https://www.hamdirzl.my.id', 
-  'https://hrportof.netlify.app'
-];
-
-const wss = new WebSocket.Server({ // [FIX] Menggunakan WebSocket.Server
+const wss = new WebSocket.Server({
     server,
     verifyClient: (info, done) => {
         const origin = info.origin;
@@ -991,21 +1002,17 @@ const wss = new WebSocket.Server({ // [FIX] Menggunakan WebSocket.Server
     }
 });
 
-const clients = new Map();
-let adminWs = null;
-
+// [MODIFIKASI] Logika WebSocket Server
 wss.on('connection', (ws, req) => {
     const urlParams = new URLSearchParams(req.url.slice(req.url.startsWith('/?') ? 2 : 1));
     const token = urlParams.get('token');
-    let isThisAdmin = false;
-    let userId = '';
 
     if (token) {
         jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
             if (!err && user.role === 'admin') {
                 console.log('Admin terhubung ke WebSocket.');
+                ws.isAdmin = true;
                 adminWs = ws;
-                isThisAdmin = true;
                 ws.send(JSON.stringify({ type: 'admin_connected' }));
 
                 clients.forEach((clientData) => {
@@ -1016,55 +1023,56 @@ wss.on('connection', (ws, req) => {
             }
         });
     }
-    
-    if (!isThisAdmin) {
-        userId = crypto.randomUUID();
-        clients.set(userId, { ws: ws, conversationId: userId });
-        console.log(`Pengunjung baru terhubung dengan ID: ${userId}`);
-        ws.send(JSON.stringify({ type: 'init', userId: userId }));
-        
-        if (adminWs && adminWs.readyState === WebSocket.OPEN) {
-             ws.send(JSON.stringify({ type: 'status_update', status: 'terhubung', initial: true }));
-        } else {
-             ws.send(JSON.stringify({ type: 'status_update', status: 'menghubungi', initial: true }));
-        }
-    }
 
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
 
-            if (isThisAdmin) {
+            if (ws.isAdmin) {
                 if (data.type === 'admin_message' && data.targetUserId) {
                     const clientData = clients.get(data.targetUserId);
                     if (clientData && clientData.ws.readyState === WebSocket.OPEN) {
                         clientData.ws.send(JSON.stringify({ type: 'chat', sender: 'admin', content: data.content }));
-                        
                         pool.query(
                             'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content) VALUES ($1, $2, $3, $4)',
                             [data.targetUserId, 'admin', 'admin', data.content]
                         ).catch(err => console.error("Gagal simpan pesan admin ke DB:", err));
                     }
                 }
-            } else {
-                if (data.type === 'user_message') {
-                    if (adminWs && adminWs.readyState === WebSocket.OPEN) {
-                        adminWs.send(JSON.stringify({ type: 'chat', sender: userId, content: data.content }));
-                        ws.send(JSON.stringify({ type: 'status_update', status: 'terhubung' }));
-                    } else {
-                        ws.send(JSON.stringify({ type: 'status_update', status: 'menghubungi' }));
-                    }
+                return;
+            }
 
-                    pool.query(
-                        'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content) VALUES ($1, $2, $3, $4)',
-                        [userId, userId, 'user', data.content]
-                    ).catch(err => console.error("Gagal simpan pesan user ke DB:", err));
-                    
-                    if (!adminWs || adminWs.readyState !== WebSocket.OPEN) {
-                        const notifMessage = `Pesan Baru dari Pengunjung\nID: ${userId}\n\nPesan: ${data.content}`;
-                        sendTelegramNotification(notifMessage);
-                    }
+            if (data.type === 'identify') {
+                ws.userId = data.session.userId;
+                ws.userName = data.session.userName;
+                clients.set(ws.userId, { ws: ws, name: ws.userName });
+                console.log(`Pengunjung teridentifikasi: ${ws.userName} (ID: ${ws.userId})`);
+
+                if (adminWs && adminWs.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'status_update', status: 'terhubung' }));
+                } else {
+                    ws.send(JSON.stringify({ type: 'status_update', status: 'menghubungi' }));
                 }
+            } else if (data.type === 'user_message') {
+                if (!ws.userId) {
+                    console.log('Pesan dari klien yang belum teridentifikasi diabaikan.');
+                    return;
+                }
+
+                const clientInfo = clients.get(ws.userId);
+                const userName = clientInfo ? clientInfo.name : 'Pengunjung';
+                
+                if (adminWs && adminWs.readyState === WebSocket.OPEN) {
+                    adminWs.send(JSON.stringify({ type: 'chat', sender: ws.userId, content: data.content, userName: userName }));
+                } else {
+                    const notifMessage = `Pesan Baru dari ${userName}\nID: ${ws.userId}\n\nPesan: ${data.content}`;
+                    sendTelegramNotification(notifMessage);
+                }
+
+                pool.query(
+                    'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content) VALUES ($1, $2, $3, $4)',
+                    [ws.userId, ws.userId, 'user', data.content]
+                ).catch(err => console.error("Gagal simpan pesan user ke DB:", err));
             }
         } catch (e) {
             console.error("Gagal memproses pesan WebSocket:", e);
@@ -1072,20 +1080,23 @@ wss.on('connection', (ws, req) => {
     });
 
     ws.on('close', () => {
-        if (isThisAdmin) {
+        if (ws.isAdmin) {
             console.log('Admin terputus dari WebSocket.');
             adminWs = null;
-             clients.forEach((clientData) => {
+            clients.forEach((clientData) => {
                 if (clientData.ws.readyState === WebSocket.OPEN) {
                    clientData.ws.send(JSON.stringify({ type: 'status_update', status: 'menghubungi' }));
                 }
             });
-        } else {
-            console.log(`Pengunjung dengan ID ${userId} terputus.`);
+        } else if (ws.userId) {
+            const clientInfo = clients.get(ws.userId);
+            const userName = clientInfo ? clientInfo.name : 'Pengunjung tak dikenal';
+            console.log(`Pengunjung ${userName} (ID: ${ws.userId}) terputus.`);
+            
             if (adminWs && adminWs.readyState === WebSocket.OPEN) {
-                adminWs.send(JSON.stringify({ type: 'user_disconnected', userId: userId }));
+                adminWs.send(JSON.stringify({ type: 'user_disconnected', userId: ws.userId }));
             }
-            clients.delete(userId);
+            clients.delete(ws.userId);
         }
     });
     

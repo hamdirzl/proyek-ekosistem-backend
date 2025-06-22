@@ -108,7 +108,6 @@ fs.mkdir('uploads', { recursive: true }).catch(console.error);
 fs.mkdir(path.join(__dirname, 'public', 'uploads'), { recursive: true }).catch(console.error);
 
 // === ROUTES (Semua app.get, app.post, dll) ===
-// ... (semua route Anda dari /api/register hingga /api/admin/chat/history/:conversationId tetap sama)
 app.post('/api/register', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -578,7 +577,7 @@ app.get('/api/portfolio', async (req, res) => {
 app.get('/api/portfolio/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const result = await pool.query('SELECT id, title, description, image_url, created_at FROM portfolio_projects WHERE id = $1', [id]);
+        const result = await pool.query('SELECT * FROM portfolio_projects WHERE id = $1', [id]);
 
         if (result.rows.length === 0) {
             return res.status(404).json({ error: 'Proyek tidak ditemukan.' });
@@ -930,17 +929,12 @@ app.post('/api/telegram/webhook', (req, res) => {
             const clientData = clients.get(targetUserId);
 
             if (clientData && clientData.ws.readyState === WebSocket.OPEN) {
-                
-                // Kirim pembaruan status terlebih dahulu untuk memberitahu klien bahwa admin sudah terhubung
                 clientData.ws.send(JSON.stringify({ type: 'status_update', status: 'terhubung' }));
-                
-                // Kemudian kirim pesan balasan dari admin
                 clientData.ws.send(JSON.stringify({
                     type: 'chat',
                     sender: 'admin',
                     content: adminReply
                 }));
-
                 console.log(`Balasan dari Telegram untuk ${targetUserId} berhasil diteruskan.`);
             } else {
                 console.log(`Gagal meneruskan balasan dari Telegram, pengunjung ${targetUserId} sudah offline atau tidak ditemukan.`);
@@ -1001,7 +995,6 @@ const wss = new WebSocket.Server({ server });
 let adminWs = null;
 const clients = new Map();
 
-// Fungsi Heartbeat untuk menjaga koneksi WebSocket
 function heartbeat() {
   this.isAlive = true;
 }

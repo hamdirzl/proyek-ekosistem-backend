@@ -1021,5 +1021,61 @@ app.get('/:slug', async (req, res) => {
         res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
     }
 });
+// === [BARU] ENDPOINTS UNTUK LIVE CHAT ===
+
+// Endpoint untuk user/admin mengirim pesan
+app.post('/api/chat/message', authenticateToken, async (req, res) => {
+    try {
+        const { session_id, content } = req.body;
+        const { id: user_id, role: sender_role } = req.user;
+
+        if (!session_id || !content) {
+            return res.status(400).json({ error: 'Session ID dan konten pesan wajib diisi.' });
+        }
+
+        // Di sini, Anda bisa menambahkan logika untuk memvalidasi session_id jika perlu
+        // Untuk sekarang, kita langsung simpan
+        const { data, error } = await supabase
+            .from('live_chat_messages')
+            .insert([{ session_id, sender_id: user_id, sender_role, content }])
+            .select();
+
+        if (error) throw error;
+        res.status(201).json(data[0]);
+    } catch (error) {
+        console.error('Error sending chat message:', error);
+        res.status(500).json({ error: 'Gagal mengirim pesan.' });
+    }
+});
+
+// Endpoint untuk admin mengambil semua sesi percakapan
+app.get('/api/chat/sessions', authenticateAdmin, async (req, res) => {
+    try {
+        const { data, error } = await supabase.rpc('get_chat_sessions');
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        console.error('Error fetching chat sessions:', error);
+        res.status(500).json({ error: 'Gagal mengambil sesi chat.' });
+    }
+});
+
+// Endpoint untuk admin mengambil pesan dari satu sesi
+app.get('/api/chat/messages/:sessionId', authenticateAdmin, async (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        const { data, error } = await supabase
+            .from('live_chat_messages')
+            .select('*')
+            .eq('session_id', sessionId)
+            .order('created_at', { ascending: true });
+
+        if (error) throw error;
+        res.json(data);
+    } catch (error) {
+        console.error('Error fetching messages for session:', error);
+        res.status(500).json({ error: 'Gagal mengambil pesan.' });
+    }
+});
 
 app.listen(PORT, () => console.log(`Server berjalan di port ${PORT}`));

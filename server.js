@@ -1,9 +1,9 @@
-// VERSI FINAL DENGAN INTEGRASI SUPABASE STORAGE & LIVE CHAT (TERMASUK NOTIFIKASI & BALASAN TELEGRAM DENGAN LOG DEBUG)
+// VERSI FINAL DENGAN INTEGRASI SUPABASE STORAGE & LIVE CHAT (TERMASUK NOTIFIKASI & BALASAN TELEGRAM - FIX)
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
+const jwt =require('jsonwebtoken');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const { Pool } = require('pg');
@@ -104,7 +104,6 @@ app.use('/public', express.static(path.join(__dirname, 'public')));
 const upload = multer({ dest: 'uploads/' });
 fs.mkdir('uploads', { recursive: true }).catch(console.error);
 fs.mkdir(path.join(__dirname, 'public', 'uploads'), { recursive: true }).catch(console.error);
-
 
 // === ROUTES ===
 app.post('/api/register', async (req, res) => {
@@ -915,25 +914,18 @@ app.get('/api/admin/chat/history/:conversationId', authenticateAdmin, async (req
     }
 });
 
-// ENDPOINT WEBHOOK TELEGRAM DENGAN LOG DEBUG
+// ENDPOINT WEBHOOK TELEGRAM
 app.post('/api/telegram/webhook', (req, res) => {
-    console.log("=== Webhook dari Telegram Diterima ===");
-    console.log("Isi Body Request:", JSON.stringify(req.body, null, 2));
-
     const { message } = req.body;
 
     if (message && message.reply_to_message && message.chat.id.toString() === process.env.TELEGRAM_CHAT_ID) {
-        console.log("Pesan adalah balasan yang valid dari admin.");
         const originalText = message.reply_to_message.text;
         const adminReply = message.text;
-        console.log("Pesan Asli (untuk diekstrak):", originalText);
-        console.log("Balasan Admin:", adminReply);
 
-        const match = originalText.match(/Dari: <code>(.+?)<\/code>/);
+        // [FIX] Menggunakan regex yang lebih andal untuk plain text
+        const match = originalText.match(/ID: ([\w-]+)/);
         if (match && match[1]) {
             const targetUserId = match[1];
-            console.log(`Berhasil mengekstrak targetUserId: ${targetUserId}`);
-
             const clientData = clients.get(targetUserId);
 
             if (clientData && clientData.ws.readyState === WebSocket.OPEN) {
@@ -942,7 +934,7 @@ app.post('/api/telegram/webhook', (req, res) => {
                     sender: 'admin',
                     content: adminReply
                 }));
-                console.log(`Balasan dari Telegram untuk ${targetUserId} BERHASIL diteruskan.`);
+                console.log(`Balasan dari Telegram untuk ${targetUserId} berhasil diteruskan.`);
             } else {
                 console.log(`Gagal meneruskan balasan dari Telegram, pengunjung ${targetUserId} sudah offline atau tidak ditemukan.`);
             }
@@ -953,10 +945,8 @@ app.post('/api/telegram/webhook', (req, res) => {
             ).catch(err => console.error("Gagal simpan balasan admin dari Telegram ke DB:", err));
 
         } else {
-            console.log("GAGAL: Tidak bisa mengekstrak targetUserId dari pesan balasan.");
+             console.log("GAGAL: Tidak bisa mengekstrak targetUserId dari pesan balasan.");
         }
-    } else {
-        console.log("Pesan diabaikan (bukan balasan atau bukan dari admin).");
     }
 
     res.sendStatus(200);
@@ -1071,7 +1061,8 @@ wss.on('connection', (ws, req) => {
                     ).catch(err => console.error("Gagal simpan pesan user ke DB:", err));
                     
                     if (!adminWs || adminWs.readyState !== ws.OPEN) {
-                        const notifMessage = `<b>Pesan Baru!</b>\n\nDari: code>${userId}</code>\n\nPesan: ${data.content}`;
+                        // [FIX] Menggunakan format notifikasi plain text yang andal
+                        const notifMessage = `Pesan Baru dari Pengunjung\nID: ${userId}\n\nPesan: ${data.content}`;
                         sendTelegramNotification(notifMessage);
                     }
                 }

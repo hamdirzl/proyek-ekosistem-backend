@@ -1,4 +1,4 @@
-// VERSI FINAL DENGAN INTEGRASI SUPABASE STORAGE & LIVE CHAT (TERMASUK NOTIFIKASI TELEGRAM)
+// VERSI FINAL DENGAN INTEGRASI SUPABASE STORAGE & LIVE CHAT (TERMASUK NOTIFIKASI & BALASAN TELEGRAM)
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -18,20 +18,15 @@ const { createClient } = require('@supabase/supabase-js');
 const sanitizeHtml = require('sanitize-html');
 const http = require('http');
 const { WebSocketServer } = require('ws');
-const axios = require('axios'); // [BARU] Import axios
+const axios = require('axios');
 
-// Inisialisasi Supabase Client
+// ... (semua kode dari inisialisasi Supabase sampai fungsi authenticateAdmin tetap sama persis)
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
-
-// === KONFIGURASI DATABASE ===
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
-
 function generateSlug() { return Math.random().toString(36).substring(2, 8); }
-
-// === KONFIGURASI PENGIRIM EMAIL (NODEMAILER) ===
 const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
@@ -39,8 +34,6 @@ const transporter = nodemailer.createTransport({
         pass: process.env.EMAIL_PASS
     }
 });
-
-// [BARU] FUNGSI UNTUK NOTIFIKASI TELEGRAM
 async function sendTelegramNotification(message) {
     const token = process.env.TELEGRAM_BOT_TOKEN;
     const chatId = process.env.TELEGRAM_CHAT_ID;
@@ -60,8 +53,6 @@ async function sendTelegramNotification(message) {
         console.error('Gagal mengirim notifikasi Telegram:', error.response ? error.response.data : error.message);
     }
 }
-
-// === MIDDLEWARE ===
 function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
@@ -73,7 +64,6 @@ function authenticateToken(req, res, next) {
         next();
     });
 }
-
 function authenticateAdmin(req, res, next) {
     authenticateToken(req, res, () => {
         if (req.user.role !== 'admin') {
@@ -82,12 +72,9 @@ function authenticateAdmin(req, res, next) {
         next();
     });
 }
-
 const app = express();
 const PORT = process.env.PORT || 3000;
-
 app.set('trust proxy', true);
-
 app.use(cors({
   origin: [
     'https://hamdirzl.my.id', 
@@ -96,18 +83,15 @@ app.use(cors({
   ],
   exposedHeaders: ['Content-Disposition', 'X-Original-Size', 'X-Compressed-Size']
 }));
-
 app.use(express.json());
-
 app.use('/public', express.static(path.join(__dirname, 'public')));
-
 const upload = multer({ dest: 'uploads/' });
 fs.mkdir('uploads', { recursive: true }).catch(console.error);
 fs.mkdir(path.join(__dirname, 'public', 'uploads'), { recursive: true }).catch(console.error);
 
 
 // === ROUTES ===
-// ... (SEMUA RUTE DARI /api/register HINGGA /api/admin/jurnal/:id TETAP SAMA PERSIS)
+// ... (semua rute dari /api/register sampai /api/admin/jurnal/:id tetap sama persis)
 // Autentikasi dan Registrasi
 app.post('/api/register', async (req, res) => {
     try {
@@ -917,7 +901,47 @@ app.get('/api/admin/chat/history/:conversationId', authenticateAdmin, async (req
     }
 });
 
+// [BARU] ENDPOINT UNTUK MENERIMA PESAN DARI TELEGRAM
+app.post('/api/telegram/webhook', (req, res) => {
+    const { message } = req.body;
 
+    // Pastikan ini adalah balasan dan dari admin
+    if (message && message.reply_to_message && message.chat.id.toString() === process.env.TELEGRAM_CHAT_ID) {
+        const originalText = message.reply_to_message.text;
+        const adminReply = message.text;
+
+        // Ekstrak userId dari pesan notifikasi asli
+        const match = originalText.match(/Dari: <code>(.+?)<\/code>/);
+        if (match && match[1]) {
+            const targetUserId = match[1];
+            const clientData = clients.get(targetUserId);
+
+            // Jika pengunjung masih online, kirim pesannya
+            if (clientData && clientData.ws.readyState === WebSocket.OPEN) {
+                clientData.ws.send(JSON.stringify({
+                    type: 'chat',
+                    sender: 'admin',
+                    content: adminReply
+                }));
+                console.log(`Balasan dari Telegram untuk ${targetUserId} berhasil diteruskan.`);
+            } else {
+                console.log(`Gagal meneruskan balasan dari Telegram, pengunjung ${targetUserId} sudah offline.`);
+            }
+            
+            // Simpan juga balasan admin ke database
+            pool.query(
+                'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content) VALUES ($1, $2, $3, $4)',
+                [targetUserId, 'admin', 'admin', adminReply]
+            ).catch(err => console.error("Gagal simpan balasan admin dari Telegram ke DB:", err));
+
+        }
+    }
+
+    res.sendStatus(200); // Selalu kirim status 200 OK ke Telegram
+});
+
+
+// === ROOT & REDIRECT ===
 app.get('/', (req, res) => res.send('Halo dari Backend Server Node.js! Terhubung ke PostgreSQL.'));
 
 app.get('/:slug', async (req, res) => {
@@ -935,11 +959,6 @@ app.get('/:slug', async (req, res) => {
         res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
     }
 });
-
-
-// ======================================================
-// === INISIALISASI SERVER HTTP & WEBSOCKET ===
-// ======================================================
 
 const server = http.createServer(app);
 

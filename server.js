@@ -1,4 +1,4 @@
-// VERSI FINAL DENGAN INTEGRASI SUPABASE STORAGE & LIVE CHAT (TERMASUK NOTIFIKASI & BALASAN TELEGRAM)
+// VERSI FINAL DENGAN INTEGRASI SUPABASE STORAGE & LIVE CHAT (TERMASUK NOTIFIKASI & BALASAN TELEGRAM DENGAN LOG DEBUG)
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -20,13 +20,18 @@ const http = require('http');
 const { WebSocketServer } = require('ws');
 const axios = require('axios');
 
-// ... (semua kode dari inisialisasi Supabase sampai fungsi authenticateAdmin tetap sama persis)
+// Inisialisasi Supabase Client
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+
+// === KONFIGURASI DATABASE ===
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
+
 function generateSlug() { return Math.random().toString(36).substring(2, 8); }
+
+// === KONFIGURASI PENGIRIM EMAIL (NODEMAILER) ===
 const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
@@ -34,6 +39,8 @@ const transporter = nodemailer.createTransport({
         pass: process.env.EMAIL_PASS
     }
 });
+
+// FUNGSI UNTUK NOTIFIKASI TELEGRAM
 async function sendTelegramNotification(message) {
     const token = process.env.TELEGRAM_BOT_TOKEN;
     const chatId = process.env.TELEGRAM_CHAT_ID;
@@ -53,6 +60,8 @@ async function sendTelegramNotification(message) {
         console.error('Gagal mengirim notifikasi Telegram:', error.response ? error.response.data : error.message);
     }
 }
+
+// === MIDDLEWARE ===
 function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
@@ -64,6 +73,7 @@ function authenticateToken(req, res, next) {
         next();
     });
 }
+
 function authenticateAdmin(req, res, next) {
     authenticateToken(req, res, () => {
         if (req.user.role !== 'admin') {
@@ -72,9 +82,12 @@ function authenticateAdmin(req, res, next) {
         next();
     });
 }
+
 const app = express();
 const PORT = process.env.PORT || 3000;
+
 app.set('trust proxy', true);
+
 app.use(cors({
   origin: [
     'https://hamdirzl.my.id', 
@@ -83,16 +96,17 @@ app.use(cors({
   ],
   exposedHeaders: ['Content-Disposition', 'X-Original-Size', 'X-Compressed-Size']
 }));
+
 app.use(express.json());
+
 app.use('/public', express.static(path.join(__dirname, 'public')));
+
 const upload = multer({ dest: 'uploads/' });
 fs.mkdir('uploads', { recursive: true }).catch(console.error);
 fs.mkdir(path.join(__dirname, 'public', 'uploads'), { recursive: true }).catch(console.error);
 
 
 // === ROUTES ===
-// ... (semua rute dari /api/register sampai /api/admin/jurnal/:id tetap sama persis)
-// Autentikasi dan Registrasi
 app.post('/api/register', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -901,47 +915,53 @@ app.get('/api/admin/chat/history/:conversationId', authenticateAdmin, async (req
     }
 });
 
-// [BARU] ENDPOINT UNTUK MENERIMA PESAN DARI TELEGRAM
+// ENDPOINT WEBHOOK TELEGRAM DENGAN LOG DEBUG
 app.post('/api/telegram/webhook', (req, res) => {
+    console.log("=== Webhook dari Telegram Diterima ===");
+    console.log("Isi Body Request:", JSON.stringify(req.body, null, 2));
+
     const { message } = req.body;
 
-    // Pastikan ini adalah balasan dan dari admin
     if (message && message.reply_to_message && message.chat.id.toString() === process.env.TELEGRAM_CHAT_ID) {
+        console.log("Pesan adalah balasan yang valid dari admin.");
         const originalText = message.reply_to_message.text;
         const adminReply = message.text;
+        console.log("Pesan Asli (untuk diekstrak):", originalText);
+        console.log("Balasan Admin:", adminReply);
 
-        // Ekstrak userId dari pesan notifikasi asli
         const match = originalText.match(/Dari: <code>(.+?)<\/code>/);
         if (match && match[1]) {
             const targetUserId = match[1];
+            console.log(`Berhasil mengekstrak targetUserId: ${targetUserId}`);
+
             const clientData = clients.get(targetUserId);
 
-            // Jika pengunjung masih online, kirim pesannya
             if (clientData && clientData.ws.readyState === WebSocket.OPEN) {
                 clientData.ws.send(JSON.stringify({
                     type: 'chat',
                     sender: 'admin',
                     content: adminReply
                 }));
-                console.log(`Balasan dari Telegram untuk ${targetUserId} berhasil diteruskan.`);
+                console.log(`Balasan dari Telegram untuk ${targetUserId} BERHASIL diteruskan.`);
             } else {
-                console.log(`Gagal meneruskan balasan dari Telegram, pengunjung ${targetUserId} sudah offline.`);
+                console.log(`Gagal meneruskan balasan dari Telegram, pengunjung ${targetUserId} sudah offline atau tidak ditemukan.`);
             }
             
-            // Simpan juga balasan admin ke database
             pool.query(
                 'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content) VALUES ($1, $2, $3, $4)',
                 [targetUserId, 'admin', 'admin', adminReply]
             ).catch(err => console.error("Gagal simpan balasan admin dari Telegram ke DB:", err));
 
+        } else {
+            console.log("GAGAL: Tidak bisa mengekstrak targetUserId dari pesan balasan.");
         }
+    } else {
+        console.log("Pesan diabaikan (bukan balasan atau bukan dari admin).");
     }
 
-    res.sendStatus(200); // Selalu kirim status 200 OK ke Telegram
+    res.sendStatus(200);
 });
 
-
-// === ROOT & REDIRECT ===
 app.get('/', (req, res) => res.send('Halo dari Backend Server Node.js! Terhubung ke PostgreSQL.'));
 
 app.get('/:slug', async (req, res) => {
@@ -1051,7 +1071,7 @@ wss.on('connection', (ws, req) => {
                     ).catch(err => console.error("Gagal simpan pesan user ke DB:", err));
                     
                     if (!adminWs || adminWs.readyState !== ws.OPEN) {
-                        const notifMessage = `<b>Pesan Baru!</b>\n\nDari: <code>${userId}</code>\n\nPesan: ${data.content}`;
+                        const notifMessage = `<b>Pesan Baru!</b>\n\nDari: code>${userId}</code>\n\nPesan: ${data.content}`;
                         sendTelegramNotification(notifMessage);
                     }
                 }

@@ -912,14 +912,16 @@ app.post('/api/admin/jurnal/upload-image', authenticateAdmin, upload.single('fil
 
 
 // ENDPOINT ADMIN: Membuat postingan jurnal baru (DIMODIFIKASI)
-app.post('/api/admin/jurnal', authenticateAdmin, async (req, res) => {
+app.post('/api/admin/jurnal', authenticateAdmin, async (req, res) => { // upload.single('image') dihapus
     try {
         const { title, content } = req.body;
+        // Tidak ada lagi req.file di sini, gambar utama (jika ada) sudah termasuk dalam HTML konten
         if (!title || !content) {
             return res.status(400).json({ error: 'Judul dan konten wajib diisi.' });
         }
 
-        let cleanContent = sanitizeHtml(content, { // <-- DIUBAH DARI CONST MENJADI LET
+        // Membersihkan HTML untuk keamanan
+        const cleanContent = sanitizeHtml(content, {
             allowedTags: sanitizeHtml.defaults.allowedTags.concat(['img', 'p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'strong', 'em', 'u', 'a']),
             allowedAttributes: {
                 ...sanitizeHtml.defaults.allowedAttributes,
@@ -928,6 +930,7 @@ app.post('/api/admin/jurnal', authenticateAdmin, async (req, res) => {
             }
         });
 
+        // Logika untuk mengambil gambar pertama dari konten sebagai gambar utama (opsional)
         const firstImageMatch = cleanContent.match(/<img[^>]+src="([^">]+)"/);
         const mainImageUrl = firstImageMatch ? firstImageMatch[1] : null;
 
@@ -945,12 +948,13 @@ app.post('/api/admin/jurnal', authenticateAdmin, async (req, res) => {
 });
 
 // ENDPOINT ADMIN: Memperbarui postingan jurnal (DIMODIFIKASI)
-app.put('/api/admin/jurnal/:id', authenticateAdmin, async (req, res) => {
+app.put('/api/admin/jurnal/:id', authenticateAdmin, async (req, res) => { // upload.single('image') dihapus
     try {
         const { id } = req.params;
         const { title, content } = req.body;
         
-        let cleanContent = sanitizeHtml(content, { // <-- DIUBAH DARI CONST MENJADI LET
+        // Membersihkan HTML untuk keamanan
+        const cleanContent = sanitizeHtml(content, {
             allowedTags: sanitizeHtml.defaults.allowedTags.concat(['img', 'p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'strong', 'em', 'u', 'a']),
             allowedAttributes: {
                 ...sanitizeHtml.defaults.allowedAttributes,
@@ -1019,62 +1023,6 @@ app.get('/:slug', async (req, res) => {
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Terjadi kesalahan pada server.' });
-    }
-});
-// === [BARU] ENDPOINTS UNTUK LIVE CHAT ===
-
-// Endpoint untuk user/admin mengirim pesan
-app.post('/api/chat/message', authenticateToken, async (req, res) => {
-    try {
-        const { session_id, content } = req.body;
-        const { id: user_id, role: sender_role } = req.user;
-
-        if (!session_id || !content) {
-            return res.status(400).json({ error: 'Session ID dan konten pesan wajib diisi.' });
-        }
-
-        // Di sini, Anda bisa menambahkan logika untuk memvalidasi session_id jika perlu
-        // Untuk sekarang, kita langsung simpan
-        const { data, error } = await supabase
-            .from('live_chat_messages')
-            .insert([{ session_id, sender_id: user_id, sender_role, content }])
-            .select();
-
-        if (error) throw error;
-        res.status(201).json(data[0]);
-    } catch (error) {
-        console.error('Error sending chat message:', error);
-        res.status(500).json({ error: 'Gagal mengirim pesan.' });
-    }
-});
-
-// Endpoint untuk admin mengambil semua sesi percakapan
-app.get('/api/chat/sessions', authenticateAdmin, async (req, res) => {
-    try {
-        const { data, error } = await supabase.rpc('get_chat_sessions');
-        if (error) throw error;
-        res.json(data);
-    } catch (error) {
-        console.error('Error fetching chat sessions:', error);
-        res.status(500).json({ error: 'Gagal mengambil sesi chat.' });
-    }
-});
-
-// Endpoint untuk admin mengambil pesan dari satu sesi
-app.get('/api/chat/messages/:sessionId', authenticateAdmin, async (req, res) => {
-    try {
-        const { sessionId } = req.params;
-        const { data, error } = await supabase
-            .from('live_chat_messages')
-            .select('*')
-            .eq('session_id', sessionId)
-            .order('created_at', { ascending: true });
-
-        if (error) throw error;
-        res.json(data);
-    } catch (error) {
-        console.error('Error fetching messages for session:', error);
-        res.status(500).json({ error: 'Gagal mengambil pesan.' });
     }
 });
 

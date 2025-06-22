@@ -14,7 +14,6 @@ const { convert } = require('libreoffice-convert');
 const { PDFDocument } = require('pdf-lib');
 const QRCode = require('qrcode');
 const sharp = require('sharp');
-const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { createClient } = require('@supabase/supabase-js');
 const sanitizeHtml = require('sanitize-html');
 
@@ -37,10 +36,6 @@ const transporter = nodemailer.createTransport({
         pass: process.env.EMAIL_PASS
     }
 });
-
-// === KONFIGURASI GOOGLE GEMINI API ===
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 // === MIDDLEWARE ===
 function authenticateToken(req, res, next) {
@@ -549,37 +544,6 @@ app.post('/api/compress-image', authenticateToken, upload.single('image'), async
         await fs.unlink(inputPath).catch(err => console.error("Gagal menghapus file input sementara:", err));
     }
 });
-
-app.post('/api/chat-with-ai', authenticateToken, async (req, res) => {
-    try {
-        const userMessage = req.body.message;
-        const userId = req.user.id; 
-
-        if (!userMessage) {
-            return res.status(400).json({ error: 'Pesan tidak boleh kosong.' });
-        }
-
-        console.log(`Pesan dari pengguna ${userId}: ${userMessage}`);
-
-        const chat = model.startChat({
-            history: [],
-            generationConfig: {
-                maxOutputTokens: 200,
-            },
-        });
-
-        const result = await chat.sendMessage(userMessage);
-        const response = await result.response;
-        const text = response.text();
-
-        res.json({ reply: text });
-
-    } catch (error) {
-        console.error('Error calling Gemini API:', error);
-        res.status(500).json({ error: 'Terjadi kesalahan saat memproses pesan AI.' });
-    }
-});
-
 // === ROUTES PORTOFOLIO (PUBLIK) ===
 
 // ENDPOINT PUBLIK: Mengambil semua proyek portofolio

@@ -1,9 +1,9 @@
-// VERSI FINAL DENGAN INTEGRASI SUPABASE STORAGE & LIVE CHAT (FIX TERAKHIR UNTUK TELEGRAM)
+// VERSI FINAL DENGAN INTEGRASI SUPABASE STORAGE & LIVE CHAT (FIX TERAKHIR UNTUK REFERENCE ERROR)
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
-const jwt =require('jsonwebtoken');
+const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const { Pool } = require('pg');
@@ -17,7 +17,7 @@ const sharp = require('sharp');
 const { createClient } = require('@supabase/supabase-js');
 const sanitizeHtml = require('sanitize-html');
 const http = require('http');
-const WebSocket = require('ws');
+const WebSocket = require('ws'); // [FIX] Mengimpor seluruh library 'ws'
 const axios = require('axios');
 
 // Inisialisasi Supabase Client
@@ -52,8 +52,7 @@ async function sendTelegramNotification(message) {
     try {
         await axios.post(url, {
             chat_id: chatId,
-            text: message
-            // [FIX] Hapus baris 'parse_mode' agar dikirim sebagai teks biasa
+            text: message,
         });
         console.log('Notifikasi Telegram terkirim!');
     } catch (error) {
@@ -979,7 +978,7 @@ const allowedOrigins = [
   'https://hrportof.netlify.app'
 ];
 
-const wss = new WebSocketServer({
+const wss = new WebSocket.Server({ // [FIX] Menggunakan WebSocket.Server
     server,
     verifyClient: (info, done) => {
         const origin = info.origin;
@@ -1010,7 +1009,7 @@ wss.on('connection', (ws, req) => {
                 ws.send(JSON.stringify({ type: 'admin_connected' }));
 
                 clients.forEach((clientData) => {
-                    if (clientData.ws.readyState === ws.OPEN) {
+                    if (clientData.ws.readyState === WebSocket.OPEN) {
                         clientData.ws.send(JSON.stringify({ type: 'status_update', status: 'terhubung' }));
                     }
                 });
@@ -1024,7 +1023,7 @@ wss.on('connection', (ws, req) => {
         console.log(`Pengunjung baru terhubung dengan ID: ${userId}`);
         ws.send(JSON.stringify({ type: 'init', userId: userId }));
         
-        if (adminWs && adminWs.readyState === ws.OPEN) {
+        if (adminWs && adminWs.readyState === WebSocket.OPEN) {
              ws.send(JSON.stringify({ type: 'status_update', status: 'terhubung', initial: true }));
         } else {
              ws.send(JSON.stringify({ type: 'status_update', status: 'menghubungi', initial: true }));
@@ -1038,7 +1037,7 @@ wss.on('connection', (ws, req) => {
             if (isThisAdmin) {
                 if (data.type === 'admin_message' && data.targetUserId) {
                     const clientData = clients.get(data.targetUserId);
-                    if (clientData && clientData.ws.readyState === ws.OPEN) {
+                    if (clientData && clientData.ws.readyState === WebSocket.OPEN) {
                         clientData.ws.send(JSON.stringify({ type: 'chat', sender: 'admin', content: data.content }));
                         
                         pool.query(
@@ -1049,7 +1048,7 @@ wss.on('connection', (ws, req) => {
                 }
             } else {
                 if (data.type === 'user_message') {
-                    if (adminWs && adminWs.readyState === ws.OPEN) {
+                    if (adminWs && adminWs.readyState === WebSocket.OPEN) {
                         adminWs.send(JSON.stringify({ type: 'chat', sender: userId, content: data.content }));
                         ws.send(JSON.stringify({ type: 'status_update', status: 'terhubung' }));
                     } else {
@@ -1061,7 +1060,7 @@ wss.on('connection', (ws, req) => {
                         [userId, userId, 'user', data.content]
                     ).catch(err => console.error("Gagal simpan pesan user ke DB:", err));
                     
-                    if (!adminWs || adminWs.readyState !== ws.OPEN) {
+                    if (!adminWs || adminWs.readyState !== WebSocket.OPEN) {
                         const notifMessage = `Pesan Baru dari Pengunjung\nID: ${userId}\n\nPesan: ${data.content}`;
                         sendTelegramNotification(notifMessage);
                     }
@@ -1077,13 +1076,13 @@ wss.on('connection', (ws, req) => {
             console.log('Admin terputus dari WebSocket.');
             adminWs = null;
              clients.forEach((clientData) => {
-                if (clientData.ws.readyState === ws.OPEN) {
+                if (clientData.ws.readyState === WebSocket.OPEN) {
                    clientData.ws.send(JSON.stringify({ type: 'status_update', status: 'menghubungi' }));
                 }
             });
         } else {
             console.log(`Pengunjung dengan ID ${userId} terputus.`);
-            if (adminWs && adminWs.readyState === ws.OPEN) {
+            if (adminWs && adminWs.readyState === WebSocket.OPEN) {
                 adminWs.send(JSON.stringify({ type: 'user_disconnected', userId: userId }));
             }
             clients.delete(userId);

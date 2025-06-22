@@ -1,4 +1,4 @@
-// VERSI FINAL DENGAN INTEGRASI SUPABASE STORAGE & LIVE CHAT (TERMASUK NOTIFIKASI & BALASAN TELEGRAM - FIX)
+// VERSI FINAL DENGAN INTEGRASI SUPABASE STORAGE & LIVE CHAT (FIX TERAKHIR UNTUK TELEGRAM)
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -52,8 +52,8 @@ async function sendTelegramNotification(message) {
     try {
         await axios.post(url, {
             chat_id: chatId,
-            text: message,
-            parse_mode: 'HTML'
+            text: message
+            // [FIX] Hapus baris 'parse_mode' agar dikirim sebagai teks biasa
         });
         console.log('Notifikasi Telegram terkirim!');
     } catch (error) {
@@ -106,6 +106,8 @@ fs.mkdir('uploads', { recursive: true }).catch(console.error);
 fs.mkdir(path.join(__dirname, 'public', 'uploads'), { recursive: true }).catch(console.error);
 
 // === ROUTES ===
+// ... (SEMUA RUTE DARI /api/register HINGGA /api/admin/jurnal/:id TETAP SAMA PERSIS)
+// Autentikasi dan Registrasi
 app.post('/api/register', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -922,7 +924,6 @@ app.post('/api/telegram/webhook', (req, res) => {
         const originalText = message.reply_to_message.text;
         const adminReply = message.text;
 
-        // [FIX] Menggunakan regex yang lebih andal untuk plain text
         const match = originalText.match(/ID: ([\w-]+)/);
         if (match && match[1]) {
             const targetUserId = match[1];
@@ -1061,7 +1062,6 @@ wss.on('connection', (ws, req) => {
                     ).catch(err => console.error("Gagal simpan pesan user ke DB:", err));
                     
                     if (!adminWs || adminWs.readyState !== ws.OPEN) {
-                        // [FIX] Menggunakan format notifikasi plain text yang andal
                         const notifMessage = `Pesan Baru dari Pengunjung\nID: ${userId}\n\nPesan: ${data.content}`;
                         sendTelegramNotification(notifMessage);
                     }

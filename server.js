@@ -87,14 +87,17 @@ const PORT = process.env.PORT || 3000;
 
 app.set('trust proxy', true);
 
-app.use(cors({
-  origin: [
+const allowedOrigins = [
     'https://hamdirzl.my.id', 
     'https://www.hamdirzl.my.id', 
     'https://hrportof.netlify.app'
-  ],
+  ];
+
+app.use(cors({
+  origin: allowedOrigins,
   exposedHeaders: ['Content-Disposition', 'X-Original-Size', 'X-Compressed-Size']
 }));
+
 
 app.use(express.json());
 
@@ -612,6 +615,7 @@ app.get('/api/jurnal/:id', async (req, res) => {
     }
 });
 
+// Admin Routes
 app.get('/api/links', authenticateAdmin, async (req, res) => {
     try {
         const { search = '' } = req.query;
@@ -951,8 +955,12 @@ app.post('/api/telegram/webhook', (req, res) => {
 
 app.get('/', (req, res) => res.send('Halo dari Backend Server Node.js! Terhubung ke PostgreSQL.'));
 
-// [BARU] Endpoint untuk mengambil riwayat chat publik
-// PENTING: letakkan sebelum app.get('/:slug', ...)
+
+// === PERBAIKAN UTAMA: URUTAN ROUTE ===
+// Route yang lebih spesifik harus diletakkan SEBELUM route yang lebih umum (catch-all).
+// Ini memastikan permintaan ke '/api/chat/history/...' tidak akan ditangkap oleh '/:slug'.
+
+// Endpoint untuk mengambil riwayat chat publik
 app.get('/api/chat/history/:conversationId', async (req, res) => {
     try {
         const { conversationId } = req.params;
@@ -971,6 +979,7 @@ app.get('/api/chat/history/:conversationId', async (req, res) => {
     }
 });
 
+// Route 'catch-all' untuk slug URL Shortener
 app.get('/:slug', async (req, res) => {
     try {
         const { slug } = req.params;
@@ -987,6 +996,7 @@ app.get('/:slug', async (req, res) => {
     }
 });
 
+
 const server = http.createServer(app);
 
 const wss = new WebSocket.Server({
@@ -1002,7 +1012,10 @@ const wss = new WebSocket.Server({
     }
 });
 
-// [MODIFIKASI] Logika WebSocket Server
+let adminWs = null;
+const clients = new Map();
+
+// Logika WebSocket Server
 wss.on('connection', (ws, req) => {
     const urlParams = new URLSearchParams(req.url.slice(req.url.startsWith('/?') ? 2 : 1));
     const token = urlParams.get('token');

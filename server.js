@@ -931,13 +931,21 @@ app.post('/api/admin/jurnal', authenticateAdmin, async (req, res) => { // upload
         });
 
         // Logika untuk mengambil gambar pertama dari konten sebagai gambar utama (opsional)
-        const firstImageMatch = cleanContent.match(/<img[^>]+src="([^">]+)"/);
-        const mainImageUrl = firstImageMatch ? firstImageMatch[1] : null;
+        // ...
+const firstImageMatch = cleanContent.match(/<img[^>]+src="([^">]+)"/);
+const mainImageUrl = firstImageMatch ? firstImageMatch[1] : null;
 
-        const newPost = await pool.query(
-            'INSERT INTO jurnal_posts (title, content, image_url, user_id) VALUES ($1, $2, $3, $4) RETURNING *',
-            [title, cleanContent, mainImageUrl, req.user.id]
-        );
+// ---> TAMBAHKAN 3 BARIS INI <---
+if (firstImageMatch) {
+    cleanContent = cleanContent.replace(firstImageMatch[0], '');
+}
+// --------------------------------
+
+const newPost = await pool.query(
+    'INSERT INTO jurnal_posts (title, content, image_url, user_id) VALUES ($1, $2, $3, $4) RETURNING *',
+    [title, cleanContent, mainImageUrl, req.user.id]
+);
+// ...
 
         res.status(201).json(newPost.rows[0]);
 
@@ -965,6 +973,10 @@ app.put('/api/admin/jurnal/:id', authenticateAdmin, async (req, res) => { // upl
         
         const firstImageMatch = cleanContent.match(/<img[^>]+src="([^">]+)"/);
         const mainImageUrl = firstImageMatch ? firstImageMatch[1] : null;
+
+        if (firstImageMatch) {
+    cleanContent = cleanContent.replace(firstImageMatch[0], '');
+}
 
         const updatedPost = await pool.query(
             'UPDATE jurnal_posts SET title = $1, content = $2, image_url = $3 WHERE id = $4 RETURNING *',

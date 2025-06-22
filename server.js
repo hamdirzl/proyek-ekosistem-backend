@@ -1,4 +1,4 @@
-// VERSI FINAL DENGAN INTEGRASI SUPABASE STORAGE & LIVE CHAT (WEBSOCKET)
+// VERSI FINAL DENGAN INTEGRASI SUPABASE STORAGE & LIVE CHAT (TERMASUK NOTIFIKASI TELEGRAM)
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -9,15 +9,16 @@ const nodemailer = require('nodemailer');
 const { Pool } = require('pg');
 const multer = require('multer');
 const fs = require('fs').promises;
-const path = require('path'); // Pastikan path di-require
+const path = require('path');
 const { convert } = require('libreoffice-convert');
 const { PDFDocument } = require('pdf-lib');
 const QRCode = require('qrcode');
 const sharp = require('sharp');
 const { createClient } = require('@supabase/supabase-js');
 const sanitizeHtml = require('sanitize-html');
-const http = require('http'); // [BARU] Diperlukan untuk WebSocket
-const { WebSocketServer } = require('ws'); // [BARU] Diperlukan untuk WebSocket
+const http = require('http');
+const { WebSocketServer } = require('ws');
+const axios = require('axios'); // [BARU] Import axios
 
 // Inisialisasi Supabase Client
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
@@ -38,6 +39,27 @@ const transporter = nodemailer.createTransport({
         pass: process.env.EMAIL_PASS
     }
 });
+
+// [BARU] FUNGSI UNTUK NOTIFIKASI TELEGRAM
+async function sendTelegramNotification(message) {
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    const chatId = process.env.TELEGRAM_CHAT_ID;
+    if (!token || !chatId) {
+        console.log('Token atau Chat ID Telegram tidak diatur, notifikasi dilewati.');
+        return;
+    }
+    const url = `https://api.telegram.org/bot${token}/sendMessage`;
+    try {
+        await axios.post(url, {
+            chat_id: chatId,
+            text: message,
+            parse_mode: 'HTML'
+        });
+        console.log('Notifikasi Telegram terkirim!');
+    } catch (error) {
+        console.error('Gagal mengirim notifikasi Telegram:', error.response ? error.response.data : error.message);
+    }
+}
 
 // === MIDDLEWARE ===
 function authenticateToken(req, res, next) {
@@ -77,7 +99,6 @@ app.use(cors({
 
 app.use(express.json());
 
-// Middleware untuk menyajikan file statis dari folder 'public'
 app.use('/public', express.static(path.join(__dirname, 'public')));
 
 const upload = multer({ dest: 'uploads/' });
@@ -86,8 +107,8 @@ fs.mkdir(path.join(__dirname, 'public', 'uploads'), { recursive: true }).catch(c
 
 
 // === ROUTES ===
-
-// --- Rute Autentikasi --- (Tidak ada perubahan di sini)
+// ... (SEMUA RUTE DARI /api/register HINGGA /api/admin/jurnal/:id TETAP SAMA PERSIS)
+// Autentikasi dan Registrasi
 app.post('/api/register', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -262,7 +283,6 @@ app.post('/api/reset-password', async (req, res) => {
     }
 });
 
-// --- Rute Pengguna & Perkakas --- (Tidak ada perubahan di sini)
 app.post('/api/shorten', authenticateToken, async (req, res) => {
     try {
         const { original_url, custom_slug } = req.body;
@@ -544,7 +564,7 @@ app.post('/api/compress-image', authenticateToken, upload.single('image'), async
         await fs.unlink(inputPath).catch(err => console.error("Gagal menghapus file input sementara:", err));
     }
 });
-// --- Rute Konten Publik (Portofolio & Jurnal) --- (Tidak ada perubahan di sini)
+
 app.get('/api/portfolio', async (req, res) => {
     try {
         const result = await pool.query('SELECT id, title, description, image_url, project_link FROM portfolio_projects ORDER BY created_at DESC');
@@ -596,7 +616,6 @@ app.get('/api/jurnal/:id', async (req, res) => {
     }
 });
 
-// --- Rute Admin --- (Rute lama tetap ada, rute baru ditambahkan)
 app.get('/api/links', authenticateAdmin, async (req, res) => {
     try {
         const { search = '' } = req.query;
@@ -706,7 +725,6 @@ app.delete('/api/admin/users/:id', authenticateAdmin, async (req, res) => {
     }
 });
 
-// Rute Admin Portofolio & Jurnal (tidak ada perubahan)
 app.get('/api/admin/portfolio', authenticateAdmin, async (req, res) => {
     try {
         const result = await pool.query('SELECT * FROM portfolio_projects ORDER BY created_at DESC');
@@ -885,7 +903,6 @@ app.delete('/api/admin/jurnal/:id', authenticateAdmin, async (req, res) => {
     }
 });
 
-// [BARU] Rute untuk mengambil riwayat chat
 app.get('/api/admin/chat/history/:conversationId', authenticateAdmin, async (req, res) => {
     try {
         const { conversationId } = req.params;
@@ -901,7 +918,6 @@ app.get('/api/admin/chat/history/:conversationId', authenticateAdmin, async (req
 });
 
 
-// === ROOT & REDIRECT ===
 app.get('/', (req, res) => res.send('Halo dari Backend Server Node.js! Terhubung ke PostgreSQL.'));
 
 app.get('/:slug', async (req, res) => {
@@ -922,7 +938,7 @@ app.get('/:slug', async (req, res) => {
 
 
 // ======================================================
-// === [BARU] INISIALISASI SERVER HTTP & WEBSOCKET ===
+// === INISIALISASI SERVER HTTP & WEBSOCKET ===
 // ======================================================
 
 const server = http.createServer(app);
@@ -937,7 +953,7 @@ const wss = new WebSocketServer({
     server,
     verifyClient: (info, done) => {
         const origin = info.origin;
-        if (allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') { // Izinkan semua di development
+        if (allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
             done(true);
         } else {
             console.warn(`Koneksi WebSocket dari origin tidak diizinkan ditolak: ${origin}`);
@@ -974,7 +990,7 @@ wss.on('connection', (ws, req) => {
     
     if (!isThisAdmin) {
         userId = crypto.randomUUID();
-        clients.set(userId, { ws: ws, conversationId: userId }); // Simpan ws dan ID percakapan
+        clients.set(userId, { ws: ws, conversationId: userId });
         console.log(`Pengunjung baru terhubung dengan ID: ${userId}`);
         ws.send(JSON.stringify({ type: 'init', userId: userId }));
         
@@ -1014,6 +1030,11 @@ wss.on('connection', (ws, req) => {
                         'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content) VALUES ($1, $2, $3, $4)',
                         [userId, userId, 'user', data.content]
                     ).catch(err => console.error("Gagal simpan pesan user ke DB:", err));
+                    
+                    if (!adminWs || adminWs.readyState !== ws.OPEN) {
+                        const notifMessage = `<b>Pesan Baru!</b>\n\nDari: <code>${userId}</code>\n\nPesan: ${data.content}`;
+                        sendTelegramNotification(notifMessage);
+                    }
                 }
             }
         } catch (e) {

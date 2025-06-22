@@ -1026,8 +1026,9 @@ wss.on('connection', (ws, req) => {
     try {
         const data = JSON.parse(message);
 
-        // Langsung tangani pesan dari admin dan hentikan eksekusi
+        // BAGIAN 1: MENANGANI PESAN DARI KONEKSI ADMIN
         if (ws.isAdmin) {
+            console.log(`Admin sent: ${data.type}`); // Debugging
             if (data.type === 'admin_message' && data.targetUserId) {
                 const clientData = clients.get(data.targetUserId);
                 if (clientData && clientData.ws.readyState === WebSocket.OPEN) {
@@ -1040,14 +1041,15 @@ wss.on('connection', (ws, req) => {
             } else if (data.type === 'typing' && data.targetUserId) {
                 const clientData = clients.get(data.targetUserId);
                 if (clientData && clientData.ws.readyState === WebSocket.OPEN) {
+                    // Meneruskan event 'typing' ke pengguna yang dituju
                     clientData.ws.send(JSON.stringify({ type: 'typing', isTyping: data.isTyping }));
                 }
             }
-            // Hentikan fungsi di sini jika yang mengirim adalah admin
-            return;
+            return; // Penting: hentikan eksekusi untuk koneksi admin
         }
-        
-        // Logika untuk pesan dari pengguna (non-admin)
+
+        // BAGIAN 2: MENANGANI PESAN DARI KONEKSI PENGGUNA
+        console.log(`User sent: ${data.type}`); // Debugging
         switch (data.type) {
             case 'identify':
                 ws.userId = data.session.userId;
@@ -1055,7 +1057,6 @@ wss.on('connection', (ws, req) => {
                 clients.set(ws.userId, { ws: ws, name: ws.userName });
                 console.log(`Pengunjung teridentifikasi: ${ws.userName} (ID: ${ws.userId})`);
                 
-                // Kirim status 'terhubung' jika admin online
                 if (adminWs && adminWs.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({ type: 'status_update', status: 'terhubung' }));
                 } else {
@@ -1064,21 +1065,14 @@ wss.on('connection', (ws, req) => {
                 break;
 
             case 'user_message':
-                // Pastikan koneksi ini sudah teridentifikasi sebelum memproses pesan
-                if (!ws.userId) {
-                    console.log('Pesan dari klien yang belum teridentifikasi diabaikan.');
-                    return; // Abaikan pesan jika belum ada ID
-                }
+                if (!ws.userId) return; // Abaikan jika belum teridentifikasi
 
-                // Kirim pesan ke admin jika online, jika tidak kirim notifikasi Telegram
                 if (adminWs && adminWs.readyState === WebSocket.OPEN) {
                     adminWs.send(JSON.stringify({ type: 'chat', sender: ws.userId, content: data.content, userName: ws.userName }));
                 } else {
                     const notifMessage = `Pesan Baru dari ${ws.userName}\nID: ${ws.userId}\n\nPesan: ${data.content}`;
                     sendTelegramNotification(notifMessage);
                 }
-
-                // Simpan pesan pengguna ke database
                 pool.query(
                     'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content) VALUES ($1, $2, $3, $4)',
                     [ws.userId, ws.userId, 'user', data.content]
@@ -1086,6 +1080,9 @@ wss.on('connection', (ws, req) => {
                 break;
 
             case 'typing':
+                if (!ws.userId) return; // Abaikan jika belum teridentifikasi
+
+                // Meneruskan event 'typing' dari pengguna ke admin
                 if (adminWs && adminWs.readyState === WebSocket.OPEN) {
                     adminWs.send(JSON.stringify({ 
                         type: 'typing', 

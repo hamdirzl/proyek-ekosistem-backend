@@ -17,7 +17,7 @@ const sharp = require('sharp');
 const { createClient } = require('@supabase/supabase-js');
 const sanitizeHtml = require('sanitize-html');
 const http = require('http');
-const { WebSocketServer } = require('ws');
+const WebSocket = require('ws');
 const axios = require('axios');
 
 // Inisialisasi Supabase Client

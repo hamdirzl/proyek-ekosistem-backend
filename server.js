@@ -912,16 +912,14 @@ app.post('/api/admin/jurnal/upload-image', authenticateAdmin, upload.single('fil
 
 
 // ENDPOINT ADMIN: Membuat postingan jurnal baru (DIMODIFIKASI)
-app.post('/api/admin/jurnal', authenticateAdmin, async (req, res) => { // upload.single('image') dihapus
+app.post('/api/admin/jurnal', authenticateAdmin, async (req, res) => {
     try {
         const { title, content } = req.body;
-        // Tidak ada lagi req.file di sini, gambar utama (jika ada) sudah termasuk dalam HTML konten
         if (!title || !content) {
             return res.status(400).json({ error: 'Judul dan konten wajib diisi.' });
         }
 
-        // Membersihkan HTML untuk keamanan
-        const cleanContent = sanitizeHtml(content, {
+        let cleanContent = sanitizeHtml(content, { // <-- DIUBAH DARI CONST MENJADI LET
             allowedTags: sanitizeHtml.defaults.allowedTags.concat(['img', 'p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'strong', 'em', 'u', 'a']),
             allowedAttributes: {
                 ...sanitizeHtml.defaults.allowedAttributes,
@@ -930,22 +928,17 @@ app.post('/api/admin/jurnal', authenticateAdmin, async (req, res) => { // upload
             }
         });
 
-        // Logika untuk mengambil gambar pertama dari konten sebagai gambar utama (opsional)
-        // ...
-const firstImageMatch = cleanContent.match(/<img[^>]+src="([^">]+)"/);
-const mainImageUrl = firstImageMatch ? firstImageMatch[1] : null;
+        const firstImageMatch = cleanContent.match(/<img[^>]+src="([^">]+)"/);
+        const mainImageUrl = firstImageMatch ? firstImageMatch[1] : null;
 
-// ---> TAMBAHKAN 3 BARIS INI <---
-if (firstImageMatch) {
-    cleanContent = cleanContent.replace(firstImageMatch[0], '');
-}
-// --------------------------------
+        if (firstImageMatch) {
+            cleanContent = cleanContent.replace(firstImageMatch[0], '');
+        }
 
-const newPost = await pool.query(
-    'INSERT INTO jurnal_posts (title, content, image_url, user_id) VALUES ($1, $2, $3, $4) RETURNING *',
-    [title, cleanContent, mainImageUrl, req.user.id]
-);
-// ...
+        const newPost = await pool.query(
+            'INSERT INTO jurnal_posts (title, content, image_url, user_id) VALUES ($1, $2, $3, $4) RETURNING *',
+            [title, cleanContent, mainImageUrl, req.user.id]
+        );
 
         res.status(201).json(newPost.rows[0]);
 
@@ -956,13 +949,12 @@ const newPost = await pool.query(
 });
 
 // ENDPOINT ADMIN: Memperbarui postingan jurnal (DIMODIFIKASI)
-app.put('/api/admin/jurnal/:id', authenticateAdmin, async (req, res) => { // upload.single('image') dihapus
+app.put('/api/admin/jurnal/:id', authenticateAdmin, async (req, res) => {
     try {
         const { id } = req.params;
         const { title, content } = req.body;
         
-        // Membersihkan HTML untuk keamanan
-        const cleanContent = sanitizeHtml(content, {
+        let cleanContent = sanitizeHtml(content, { // <-- DIUBAH DARI CONST MENJADI LET
             allowedTags: sanitizeHtml.defaults.allowedTags.concat(['img', 'p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'strong', 'em', 'u', 'a']),
             allowedAttributes: {
                 ...sanitizeHtml.defaults.allowedAttributes,
@@ -975,8 +967,8 @@ app.put('/api/admin/jurnal/:id', authenticateAdmin, async (req, res) => { // upl
         const mainImageUrl = firstImageMatch ? firstImageMatch[1] : null;
 
         if (firstImageMatch) {
-    cleanContent = cleanContent.replace(firstImageMatch[0], '');
-}
+            cleanContent = cleanContent.replace(firstImageMatch[0], '');
+        }
 
         const updatedPost = await pool.query(
             'UPDATE jurnal_posts SET title = $1, content = $2, image_url = $3 WHERE id = $4 RETURNING *',

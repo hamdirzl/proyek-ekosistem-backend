@@ -1,9 +1,9 @@
-// VERSI FINAL DAN LENGKAP - DENGAN SEMUA PERBAIKAN
+// VERSI FINAL DAN LENGKAP - DENGAN SEMUA PERBAIKAN + FITUR CHAT GAMBAR/SUARA
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
+const jwt =require('jsonwebtoken');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const { Pool } = require('pg');
@@ -902,6 +902,48 @@ app.delete('/api/admin/jurnal/:id', authenticateAdmin, async (req, res) => {
     }
 });
 
+// [BARU] ENDPOINT UNTUK UPLOAD FILE CHAT
+app.post('/api/chat/upload', authenticateToken, upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: 'File tidak ditemukan.' });
+        }
+
+        const fileContent = await fs.readFile(req.file.path);
+        // Simpan di folder khusus untuk lampiran chat
+        const newFileName = `chat-attachments/${Date.now()}-${req.file.originalname.replace(/\s+/g, '_')}`;
+        const filePathInBucket = `public/${newFileName}`;
+
+        // Menggunakan bucket yang sama, tetapi dengan path folder yang berbeda
+        const { error: uploadError } = await supabase.storage
+            .from('proyek-hamdi-web-2025')
+            .upload(filePathInBucket, fileContent, {
+                contentType: req.file.mimetype
+            });
+            
+        if (uploadError) {
+            throw uploadError;
+        }
+
+        // Hapus file sementara setelah diunggah
+        await fs.unlink(req.file.path);
+
+        // Dapatkan URL publik dari file yang baru diunggah
+        const { data: publicUrlData } = supabase.storage
+            .from('proyek-hamdi-web-2025')
+            .getPublicUrl(filePathInBucket);
+            
+        res.json({ location: publicUrlData.publicUrl });
+
+    } catch (error) {
+        console.error("Gagal unggah file chat:", error);
+        if (req.file) {
+            await fs.unlink(req.file.path).catch(err => console.error("Gagal hapus file temp saat error:", err));
+        }
+        res.status(500).json({ error: "Gagal mengunggah file ke server." });
+    }
+});
+
 app.get('/api/admin/chat/history/:conversationId', authenticateAdmin, async (req, res) => {
     try {
         const { conversationId } = req.params;
@@ -933,16 +975,18 @@ app.post('/api/telegram/webhook', (req, res) => {
                 clientData.ws.send(JSON.stringify({
                     type: 'chat',
                     sender: 'admin',
-                    content: adminReply
+                    content: adminReply,
+                    messageType: 'text' // [MODIFIKASI] Asumsikan balasan dari telegram selalu teks
                 }));
                 console.log(`Balasan dari Telegram untuk ${targetUserId} berhasil diteruskan.`);
             } else {
                 console.log(`Gagal meneruskan balasan dari Telegram, pengunjung ${targetUserId} sudah offline atau tidak ditemukan.`);
             }
             
+            // [MODIFIKASI] Tambahkan message_type saat menyimpan balasan admin
             pool.query(
-                'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content) VALUES ($1, $2, $3, $4)',
-                [targetUserId, 'admin', 'admin', adminReply]
+                'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content, message_type) VALUES ($1, $2, $3, $4, $5)',
+                [targetUserId, 'admin', 'admin', adminReply, 'text']
             ).catch(err => console.error("Gagal simpan balasan admin dari Telegram ke DB:", err));
 
         } else {
@@ -962,7 +1006,7 @@ app.get('/api/chat/history/:conversationId', async (req, res) => {
             return res.status(400).json({ error: 'Format ID percakapan tidak valid.' });
         }
         const result = await pool.query(
-            'SELECT sender_type, content, created_at FROM chat_messages WHERE conversation_id = $1 ORDER BY created_at ASC',
+            'SELECT sender_type, content, created_at, message_type FROM chat_messages WHERE conversation_id = $1 ORDER BY created_at ASC',
             [conversationId]
         );
         res.json(result.rows);
@@ -1032,24 +1076,25 @@ wss.on('connection', (ws, req) => {
             if (data.type === 'admin_message' && data.targetUserId) {
                 const clientData = clients.get(data.targetUserId);
                 if (clientData && clientData.ws.readyState === WebSocket.OPEN) {
-                    clientData.ws.send(JSON.stringify({ type: 'chat', sender: 'admin', content: data.content }));
+                    // [MODIFIKASI] Teruskan messageType
+                    clientData.ws.send(JSON.stringify({ type: 'chat', sender: 'admin', content: data.content, messageType: data.messageType || 'text' }));
+                    // [MODIFIKASI] Simpan messageType ke DB
                     pool.query(
-                        'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content) VALUES ($1, $2, $3, $4)',
-                        [data.targetUserId, 'admin', 'admin', data.content]
+                        'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content, message_type) VALUES ($1, $2, $3, $4, $5)',
+                        [data.targetUserId, 'admin', 'admin', data.content, data.messageType || 'text']
                     ).catch(err => console.error("Gagal simpan pesan admin ke DB:", err));
                 }
             } else if (data.type === 'typing' && data.targetUserId) {
                 const clientData = clients.get(data.targetUserId);
                 if (clientData && clientData.ws.readyState === WebSocket.OPEN) {
-                    // Meneruskan event 'typing' ke pengguna yang dituju
                     clientData.ws.send(JSON.stringify({ type: 'typing', isTyping: data.isTyping }));
                 }
             }
-            return; // Penting: hentikan eksekusi untuk koneksi admin
+            return; 
         }
 
         // BAGIAN 2: MENANGANI PESAN DARI KONEKSI PENGGUNA
-        console.log(`User sent: ${data.type}`); // Debugging
+        console.log(`User sent: ${data.type}`);
         switch (data.type) {
             case 'identify':
                 ws.userId = data.session.userId;
@@ -1065,24 +1110,27 @@ wss.on('connection', (ws, req) => {
                 break;
 
             case 'user_message':
-                if (!ws.userId) return; // Abaikan jika belum teridentifikasi
+                if (!ws.userId) return; 
+
+                const messageType = data.messageType || 'text'; // [MODIFIKASI] Dapatkan tipe pesan
+                const content = data.content;
 
                 if (adminWs && adminWs.readyState === WebSocket.OPEN) {
-                    adminWs.send(JSON.stringify({ type: 'chat', sender: ws.userId, content: data.content, userName: ws.userName }));
+                    adminWs.send(JSON.stringify({ type: 'chat', sender: ws.userId, content: content, userName: ws.userName, messageType: messageType }));
                 } else {
-                    const notifMessage = `Pesan Baru dari ${ws.userName}\nID: ${ws.userId}\n\nPesan: ${data.content}`;
+                    const notifContent = messageType !== 'text' ? `[Pesan ${messageType}] ${content}` : content;
+                    const notifMessage = `Pesan Baru dari ${ws.userName}\nID: ${ws.userId}\n\nPesan: ${notifContent}`;
                     sendTelegramNotification(notifMessage);
                 }
+                // [MODIFIKASI] Simpan messageType ke DB
                 pool.query(
-                    'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content) VALUES ($1, $2, $3, $4)',
-                    [ws.userId, ws.userId, 'user', data.content]
+                    'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content, message_type) VALUES ($1, $2, $3, $4, $5)',
+                    [ws.userId, ws.userId, 'user', content, messageType]
                 ).catch(err => console.error("Gagal simpan pesan user ke DB:", err));
                 break;
 
             case 'typing':
-                if (!ws.userId) return; // Abaikan jika belum teridentifikasi
-
-                // Meneruskan event 'typing' dari pengguna ke admin
+                if (!ws.userId) return; 
                 if (adminWs && adminWs.readyState === WebSocket.OPEN) {
                     adminWs.send(JSON.stringify({ 
                         type: 'typing', 

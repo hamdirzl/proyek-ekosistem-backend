@@ -597,7 +597,7 @@ app.get('/api/portfolio', async (req, res) => {
 app.get('/api/portfolio/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const result = await pool.query('SELECT id, title, description, image_url, project_link, created_at FROM portfolio_projects WHERE id = $1', [id]);
+        const result = await pool.query('SELECT id, title, description, image_url, created_at FROM portfolio_projects WHERE id = $1', [id]);
 
         if (result.rows.length === 0) {
             return res.status(404).json({ error: 'Proyek tidak ditemukan.' });
@@ -750,7 +750,7 @@ app.delete('/api/admin/users/:id', authenticateAdmin, async (req, res) => {
     }
 });
 
-// === ROUTES ADMIN PORTOFOLIO (SUPABASE) ===
+// === [KODE BARU] ROUTES ADMIN PORTOFOLIO (SUPABASE) - TELAH DIMODIFIKASI ===
 
 app.get('/api/admin/portfolio', authenticateAdmin, async (req, res) => {
     try {
@@ -762,103 +762,93 @@ app.get('/api/admin/portfolio', authenticateAdmin, async (req, res) => {
     }
 });
 
-app.post('/api/admin/portfolio', authenticateAdmin, upload.single('image'), async (req, res) => {
+// [MODIFIKASI] Hapus middleware upload.single('image')
+app.post('/api/admin/portfolio', authenticateAdmin, async (req, res) => {
     try {
-        const { title, description, project_link } = req.body;
-        if (!req.file || !title || !description) {
-            if (req.file) await fs.unlink(req.file.path);
-            return res.status(400).json({ error: 'Gambar, judul, dan deskripsi wajib diisi.' });
+        // Ambil data dari body JSON, bukan form-data
+        const { title, description } = req.body;
+        if (!title || !description) {
+            return res.status(400).json({ error: 'Judul dan deskripsi wajib diisi.' });
         }
-
-        const fileContent = await fs.readFile(req.file.path);
-        const newFileName = `${Date.now()}-${req.file.originalname.replace(/\s+/g, '_')}`;
-        const filePathInBucket = `public/${newFileName}`;
-
-        const { error: uploadError } = await supabase.storage.from('proyek-hamdi-web-2025').upload(filePathInBucket, fileContent, { contentType: req.file.mimetype });
-        if (uploadError) throw uploadError;
         
-        await fs.unlink(req.file.path);
+        // Sanitasi konten HTML
+        const cleanContent = sanitizeHtml(description, {
+            allowedTags: sanitizeHtml.defaults.allowedTags.concat(['img', 'p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'strong', 'em', 'u', 'a']),
+            allowedAttributes: {
+                ...sanitizeHtml.defaults.allowedAttributes,
+                'img': ['src', 'alt', 'width', 'height', 'style'],
+                'a': ['href', 'target']
+            }
+        });
 
-        const { data: publicUrlData } = supabase.storage.from('proyek-hamdi-web-2025').getPublicUrl(filePathInBucket);
-        
+        // Ekstrak gambar pertama dari konten untuk dijadikan thumbnail
+        const firstImageMatch = cleanContent.match(/<img[^>]+src="([^">]+)"/);
+        const mainImageUrl = firstImageMatch ? firstImageMatch[1] : null;
+
+        // Query INSERT disederhanakan, tanpa project_link dan image_public_id
         const newProject = await pool.query(
-            'INSERT INTO portfolio_projects (title, description, project_link, image_url, image_public_id, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-            [title, description, project_link || null, publicUrlData.publicUrl, filePathInBucket, req.user.id]
+            'INSERT INTO portfolio_projects (title, description, image_url, user_id) VALUES ($1, $2, $3, $4) RETURNING *',
+            [title, cleanContent, mainImageUrl, req.user.id]
         );
 
         res.status(201).json(newProject.rows[0]);
 
     } catch (error) {
-        console.error('Error creating portfolio project with Supabase:', error);
-        if (req.file) await fs.unlink(req.file.path).catch(err => console.error(err));
+        console.error('Error creating portfolio project:', error);
         res.status(500).json({ error: 'Gagal membuat proyek portofolio.' });
     }
 });
 
-app.put('/api/admin/portfolio/:id', authenticateAdmin, upload.single('image'), async (req, res) => {
+// [MODIFIKASI] Hapus middleware upload.single('image')
+app.put('/api/admin/portfolio/:id', authenticateAdmin, async (req, res) => {
     try {
         const { id } = req.params;
-        const { title, description, project_link } = req.body;
+        const { title, description } = req.body;
         
-        const oldDataResult = await pool.query('SELECT image_url, image_public_id FROM portfolio_projects WHERE id = $1', [id]);
-        if (oldDataResult.rows.length === 0) {
-            if (req.file) await fs.unlink(req.file.path).catch(err => console.error(err));
+        // Sanitasi konten HTML
+        const cleanContent = sanitizeHtml(description, {
+            allowedTags: sanitizeHtml.defaults.allowedTags.concat(['img', 'p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'strong', 'em', 'u', 'a']),
+            allowedAttributes: {
+                ...sanitizeHtml.defaults.allowedAttributes,
+                'img': ['src', 'alt', 'width', 'height', 'style'],
+                'a': ['href', 'target']
+            }
+        });
+        
+        const firstImageMatch = cleanContent.match(/<img[^>]+src="([^">]+)"/);
+        const mainImageUrl = firstImageMatch ? firstImageMatch[1] : null;
+
+        // Query UPDATE disederhanakan
+        const updatedProject = await pool.query(
+            'UPDATE portfolio_projects SET title = $1, description = $2, image_url = $3 WHERE id = $4 RETURNING *',
+            [title, cleanContent, mainImageUrl, id]
+        );
+        
+        if (updatedProject.rows.length === 0) {
             return res.status(404).json({ error: 'Proyek tidak ditemukan.' });
         }
-        
-        let imageUrl = oldDataResult.rows[0].image_url;
-        let imagePath = oldDataResult.rows[0].image_public_id;
-
-        if (req.file) {
-            const fileContent = await fs.readFile(req.file.path);
-            const newFileName = `${Date.now()}-${req.file.originalname.replace(/\s+/g, '_')}`;
-            const newFilePath = `public/${newFileName}`;
-
-            const { error: uploadError } = await supabase.storage.from('proyek-hamdi-web-2025').upload(newFilePath, fileContent, { contentType: req.file.mimetype });
-            if (uploadError) throw uploadError;
-
-            await fs.unlink(req.file.path);
-            
-            if (imagePath) {
-                await supabase.storage.from('proyek-hamdi-web-2025').remove([imagePath]);
-            }
-            
-            const { data: publicUrlData } = supabase.storage.from('proyek-hamdi-web-2025').getPublicUrl(newFilePath);
-            imageUrl = publicUrlData.publicUrl;
-            imagePath = newFilePath;
-        }
-
-        const updatedProject = await pool.query(
-            'UPDATE portfolio_projects SET title = $1, description = $2, project_link = $3, image_url = $4, image_public_id = $5 WHERE id = $6 RETURNING *',
-            [title, description, project_link || null, imageUrl, imagePath, id]
-        );
 
         res.json(updatedProject.rows[0]);
 
     } catch (error) {
         console.error('Error updating portfolio project:', error);
-        if (req.file) await fs.unlink(req.file.path).catch(err => console.error(err));
         res.status(500).json({ error: 'Gagal memperbarui proyek portofolio.' });
     }
 });
 
+
+// [MODIFIKASI] Hapus logika penghapusan gambar dari Supabase
 app.delete('/api/admin/portfolio/:id', authenticateAdmin, async (req, res) => {
     try {
         const { id } = req.params;
         
-        const projectResult = await pool.query('SELECT image_public_id FROM portfolio_projects WHERE id = $1', [id]);
-        if (projectResult.rows.length === 0) {
+        // Cukup hapus record dari database
+        const result = await pool.query('DELETE FROM portfolio_projects WHERE id = $1 RETURNING id', [id]);
+
+        if (result.rowCount === 0) {
             return res.status(404).json({ error: 'Proyek tidak ditemukan.' });
         }
-        const imagePath = projectResult.rows[0].image_public_id;
-
-        if (imagePath) {
-            const { error: deleteError } = await supabase.storage.from('proyek-hamdi-web-2025').remove([imagePath]);
-            if (deleteError) console.error("Supabase delete error (ignoring):", deleteError);
-        }
-
-        await pool.query('DELETE FROM portfolio_projects WHERE id = $1', [id]);
-
+        
         res.status(200).json({ message: 'Proyek berhasil dihapus.' });
     } catch (error) {
         console.error('Error deleting portfolio project:', error);

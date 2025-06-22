@@ -1,4 +1,4 @@
-// VERSI FINAL DENGAN INTEGRASI SUPABASE STORAGE (NAMA BUCKET SUDAH DIPERBAIKI)
+// VERSI FINAL DENGAN INTEGRASI SUPABASE STORAGE & LIVE CHAT (WEBSOCKET)
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -9,12 +9,15 @@ const nodemailer = require('nodemailer');
 const { Pool } = require('pg');
 const multer = require('multer');
 const fs = require('fs').promises;
+const path = require('path'); // Pastikan path di-require
 const { convert } = require('libreoffice-convert');
 const { PDFDocument } = require('pdf-lib');
 const QRCode = require('qrcode');
 const sharp = require('sharp');
 const { createClient } = require('@supabase/supabase-js');
 const sanitizeHtml = require('sanitize-html');
+const http = require('http'); // [BARU] Diperlukan untuk WebSocket
+const { WebSocketServer } = require('ws'); // [BARU] Diperlukan untuk WebSocket
 
 // Inisialisasi Supabase Client
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
@@ -79,13 +82,12 @@ app.use('/public', express.static(path.join(__dirname, 'public')));
 
 const upload = multer({ dest: 'uploads/' });
 fs.mkdir('uploads', { recursive: true }).catch(console.error);
-fs.mkdir(path.join(__dirname, 'public', 'uploads'), { recursive: true }).catch(console.error); // Pastikan folder public ada
+fs.mkdir(path.join(__dirname, 'public', 'uploads'), { recursive: true }).catch(console.error);
 
 
 // === ROUTES ===
 
-// ... (Rute autentikasi dari register hingga reset-password tetap sama persis)
-// Autentikasi dan Registrasi
+// --- Rute Autentikasi --- (Tidak ada perubahan di sini)
 app.post('/api/register', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -260,8 +262,7 @@ app.post('/api/reset-password', async (req, res) => {
     }
 });
 
-// === ROUTES PENGGUNA & PERKAKAS ===
-// ... (Rute Pengguna & Perkakas lainnya tetap sama)
+// --- Rute Pengguna & Perkakas --- (Tidak ada perubahan di sini)
 app.post('/api/shorten', authenticateToken, async (req, res) => {
     try {
         const { original_url, custom_slug } = req.body;
@@ -543,9 +544,7 @@ app.post('/api/compress-image', authenticateToken, upload.single('image'), async
         await fs.unlink(inputPath).catch(err => console.error("Gagal menghapus file input sementara:", err));
     }
 });
-// === ROUTES PORTOFOLIO (PUBLIK) ===
-
-// ENDPOINT PUBLIK: Mengambil semua proyek portofolio
+// --- Rute Konten Publik (Portofolio & Jurnal) --- (Tidak ada perubahan di sini)
 app.get('/api/portfolio', async (req, res) => {
     try {
         const result = await pool.query('SELECT id, title, description, image_url, project_link FROM portfolio_projects ORDER BY created_at DESC');
@@ -556,7 +555,6 @@ app.get('/api/portfolio', async (req, res) => {
     }
 });
 
-// ENDPOINT PUBLIK: Mengambil SATU proyek portofolio berdasarkan ID
 app.get('/api/portfolio/:id', async (req, res) => {
     try {
         const { id } = req.params;
@@ -573,9 +571,6 @@ app.get('/api/portfolio/:id', async (req, res) => {
         res.status(500).json({ error: 'Gagal mengambil data proyek.' });
     }
 });
-
-
-// === ROUTES JURNAL (PUBLIK) ===
 
 app.get('/api/jurnal', async (req, res) => {
     try {
@@ -601,9 +596,7 @@ app.get('/api/jurnal/:id', async (req, res) => {
     }
 });
 
-
-// === ROUTES ADMIN ===
-// ... (Rute Admin lainnya seperti /api/links dan /api/admin/users tetap sama)
+// --- Rute Admin --- (Rute lama tetap ada, rute baru ditambahkan)
 app.get('/api/links', authenticateAdmin, async (req, res) => {
     try {
         const { search = '' } = req.query;
@@ -713,8 +706,7 @@ app.delete('/api/admin/users/:id', authenticateAdmin, async (req, res) => {
     }
 });
 
-// === [KODE BARU] ROUTES ADMIN PORTOFOLIO (SUPABASE) - TELAH DIMODIFIKASI ===
-
+// Rute Admin Portofolio & Jurnal (tidak ada perubahan)
 app.get('/api/admin/portfolio', authenticateAdmin, async (req, res) => {
     try {
         const result = await pool.query('SELECT * FROM portfolio_projects ORDER BY created_at DESC');
@@ -725,30 +717,21 @@ app.get('/api/admin/portfolio', authenticateAdmin, async (req, res) => {
     }
 });
 
-// [MODIFIKASI] Hapus middleware upload.single('image')
 app.post('/api/admin/portfolio', authenticateAdmin, async (req, res) => {
     try {
-        // Ambil data dari body JSON, bukan form-data
         const { title, description } = req.body;
         if (!title || !description) {
             return res.status(400).json({ error: 'Judul dan deskripsi wajib diisi.' });
         }
         
-        // Sanitasi konten HTML
         const cleanContent = sanitizeHtml(description, {
             allowedTags: sanitizeHtml.defaults.allowedTags.concat(['img', 'p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'strong', 'em', 'u', 'a']),
-            allowedAttributes: {
-                ...sanitizeHtml.defaults.allowedAttributes,
-                'img': ['src', 'alt', 'width', 'height', 'style'],
-                'a': ['href', 'target']
-            }
+            allowedAttributes: { ...sanitizeHtml.defaults.allowedAttributes, 'img': ['src', 'alt', 'width', 'height', 'style'], 'a': ['href', 'target'] }
         });
 
-        // Ekstrak gambar pertama dari konten untuk dijadikan thumbnail
         const firstImageMatch = cleanContent.match(/<img[^>]+src="([^">]+)"/);
         const mainImageUrl = firstImageMatch ? firstImageMatch[1] : null;
 
-        // Query INSERT disederhanakan, tanpa project_link dan image_public_id
         const newProject = await pool.query(
             'INSERT INTO portfolio_projects (title, description, image_url, user_id) VALUES ($1, $2, $3, $4) RETURNING *',
             [title, cleanContent, mainImageUrl, req.user.id]
@@ -762,26 +745,19 @@ app.post('/api/admin/portfolio', authenticateAdmin, async (req, res) => {
     }
 });
 
-// [MODIFIKASI] Hapus middleware upload.single('image')
 app.put('/api/admin/portfolio/:id', authenticateAdmin, async (req, res) => {
     try {
         const { id } = req.params;
         const { title, description } = req.body;
         
-        // Sanitasi konten HTML
         const cleanContent = sanitizeHtml(description, {
             allowedTags: sanitizeHtml.defaults.allowedTags.concat(['img', 'p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'strong', 'em', 'u', 'a']),
-            allowedAttributes: {
-                ...sanitizeHtml.defaults.allowedAttributes,
-                'img': ['src', 'alt', 'width', 'height', 'style'],
-                'a': ['href', 'target']
-            }
+            allowedAttributes: { ...sanitizeHtml.defaults.allowedAttributes, 'img': ['src', 'alt', 'width', 'height', 'style'], 'a': ['href', 'target'] }
         });
         
         const firstImageMatch = cleanContent.match(/<img[^>]+src="([^">]+)"/);
         const mainImageUrl = firstImageMatch ? firstImageMatch[1] : null;
 
-        // Query UPDATE disederhanakan
         const updatedProject = await pool.query(
             'UPDATE portfolio_projects SET title = $1, description = $2, image_url = $3 WHERE id = $4 RETURNING *',
             [title, cleanContent, mainImageUrl, id]
@@ -799,19 +775,11 @@ app.put('/api/admin/portfolio/:id', authenticateAdmin, async (req, res) => {
     }
 });
 
-
-// [MODIFIKASI] Hapus logika penghapusan gambar dari Supabase
 app.delete('/api/admin/portfolio/:id', authenticateAdmin, async (req, res) => {
     try {
         const { id } = req.params;
-        
-        // Cukup hapus record dari database
         const result = await pool.query('DELETE FROM portfolio_projects WHERE id = $1 RETURNING id', [id]);
-
-        if (result.rowCount === 0) {
-            return res.status(404).json({ error: 'Proyek tidak ditemukan.' });
-        }
-        
+        if (result.rowCount === 0) return res.status(404).json({ error: 'Proyek tidak ditemukan.' });
         res.status(200).json({ message: 'Proyek berhasil dihapus.' });
     } catch (error) {
         console.error('Error deleting portfolio project:', error);
@@ -819,10 +787,6 @@ app.delete('/api/admin/portfolio/:id', authenticateAdmin, async (req, res) => {
     }
 });
 
-
-// === ROUTES ADMIN JURNAL (DENGAN FUNGSI BARU) ===
-
-// ENDPOINT ADMIN: Mengambil SEMUA postingan jurnal (UNTUK PANEL ADMIN)
 app.get('/api/admin/jurnal', authenticateAdmin, async (req, res) => {
     try {
         const result = await pool.query('SELECT * FROM jurnal_posts ORDER BY created_at DESC');
@@ -833,14 +797,9 @@ app.get('/api/admin/jurnal', authenticateAdmin, async (req, res) => {
     }
 });
 
-// ***************************************************************
-// === [BARU] ENDPOINT KHUSUS UNTUK UNGGAH GAMBAR DARI EDITOR ===
-// ***************************************************************
 app.post('/api/admin/jurnal/upload-image', authenticateAdmin, upload.single('file'), async (req, res) => {
     try {
-        if (!req.file) {
-            return res.status(400).json({ error: 'File tidak ditemukan.' });
-        }
+        if (!req.file) return res.status(400).json({ error: 'File tidak ditemukan.' });
         
         const fileContent = await fs.readFile(req.file.path);
         const newFileName = `jurnal-content/${Date.now()}-${req.file.originalname.replace(/\s+/g, '_')}`;
@@ -852,8 +811,6 @@ app.post('/api/admin/jurnal/upload-image', authenticateAdmin, upload.single('fil
         await fs.unlink(req.file.path);
 
         const { data: publicUrlData } = supabase.storage.from('proyek-hamdi-web-2025').getPublicUrl(filePathInBucket);
-
-        // TinyMCE mengharapkan respons JSON dengan properti "location"
         res.json({ location: publicUrlData.publicUrl });
 
     } catch (error) {
@@ -863,27 +820,16 @@ app.post('/api/admin/jurnal/upload-image', authenticateAdmin, upload.single('fil
     }
 });
 
-
-// ENDPOINT ADMIN: Membuat postingan jurnal baru (DIMODIFIKASI)
-app.post('/api/admin/jurnal', authenticateAdmin, async (req, res) => { // upload.single('image') dihapus
+app.post('/api/admin/jurnal', authenticateAdmin, async (req, res) => {
     try {
         const { title, content } = req.body;
-        // Tidak ada lagi req.file di sini, gambar utama (jika ada) sudah termasuk dalam HTML konten
-        if (!title || !content) {
-            return res.status(400).json({ error: 'Judul dan konten wajib diisi.' });
-        }
+        if (!title || !content) return res.status(400).json({ error: 'Judul dan konten wajib diisi.' });
 
-        // Membersihkan HTML untuk keamanan
         const cleanContent = sanitizeHtml(content, {
             allowedTags: sanitizeHtml.defaults.allowedTags.concat(['img', 'p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'strong', 'em', 'u', 'a']),
-            allowedAttributes: {
-                ...sanitizeHtml.defaults.allowedAttributes,
-                'img': ['src', 'alt', 'width', 'height', 'style'],
-                'a': ['href', 'target']
-            }
+            allowedAttributes: { ...sanitizeHtml.defaults.allowedAttributes, 'img': ['src', 'alt', 'width', 'height', 'style'], 'a': ['href', 'target'] }
         });
 
-        // Logika untuk mengambil gambar pertama dari konten sebagai gambar utama (opsional)
         const firstImageMatch = cleanContent.match(/<img[^>]+src="([^">]+)"/);
         const mainImageUrl = firstImageMatch ? firstImageMatch[1] : null;
 
@@ -900,20 +846,14 @@ app.post('/api/admin/jurnal', authenticateAdmin, async (req, res) => { // upload
     }
 });
 
-// ENDPOINT ADMIN: Memperbarui postingan jurnal (DIMODIFIKASI)
-app.put('/api/admin/jurnal/:id', authenticateAdmin, async (req, res) => { // upload.single('image') dihapus
+app.put('/api/admin/jurnal/:id', authenticateAdmin, async (req, res) => {
     try {
         const { id } = req.params;
         const { title, content } = req.body;
         
-        // Membersihkan HTML untuk keamanan
         const cleanContent = sanitizeHtml(content, {
             allowedTags: sanitizeHtml.defaults.allowedTags.concat(['img', 'p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'strong', 'em', 'u', 'a']),
-            allowedAttributes: {
-                ...sanitizeHtml.defaults.allowedAttributes,
-                'img': ['src', 'alt', 'width', 'height', 'style'],
-                'a': ['href', 'target']
-            }
+            allowedAttributes: { ...sanitizeHtml.defaults.allowedAttributes, 'img': ['src', 'alt', 'width', 'height', 'style'], 'a': ['href', 'target'] }
         });
         
         const firstImageMatch = cleanContent.match(/<img[^>]+src="([^">]+)"/);
@@ -924,10 +864,7 @@ app.put('/api/admin/jurnal/:id', authenticateAdmin, async (req, res) => { // upl
             [title, cleanContent, mainImageUrl, id]
         );
         
-        if (updatedPost.rows.length === 0) {
-            return res.status(404).json({ error: 'Postingan tidak ditemukan.' });
-        }
-
+        if (updatedPost.rows.length === 0) return res.status(404).json({ error: 'Postingan tidak ditemukan.' });
         res.json(updatedPost.rows[0]);
 
     } catch (error) {
@@ -936,20 +873,11 @@ app.put('/api/admin/jurnal/:id', authenticateAdmin, async (req, res) => { // upl
     }
 });
 
-
-// ENDPOINT ADMIN: Menghapus postingan jurnal (Tetap sama, tapi perlu diingat gambar di konten tidak terhapus dari Supabase)
 app.delete('/api/admin/jurnal/:id', authenticateAdmin, async (req, res) => {
     try {
         const { id } = req.params;
-        
-        // Perhatikan: Logika ini hanya menghapus record dari DB.
-        // Gambar yang di-embed dalam konten tidak akan terhapus dari Supabase Storage.
-        // Menghapusnya memerlukan parsing HTML dan iterasi, yang cukup kompleks.
         const result = await pool.query('DELETE FROM jurnal_posts WHERE id = $1 RETURNING id', [id]);
-        if (result.rowCount === 0) {
-            return res.status(404).json({ error: 'Postingan tidak ditemukan.' });
-        }
-
+        if (result.rowCount === 0) return res.status(404).json({ error: 'Postingan tidak ditemukan.' });
         res.status(200).json({ message: 'Postingan jurnal berhasil dihapus.' });
     } catch (error) {
         console.error('Error deleting jurnal post:', error);
@@ -957,12 +885,25 @@ app.delete('/api/admin/jurnal/:id', authenticateAdmin, async (req, res) => {
     }
 });
 
+// [BARU] Rute untuk mengambil riwayat chat
+app.get('/api/admin/chat/history/:conversationId', authenticateAdmin, async (req, res) => {
+    try {
+        const { conversationId } = req.params;
+        const result = await pool.query(
+            'SELECT * FROM chat_messages WHERE conversation_id = $1 ORDER BY created_at ASC',
+            [conversationId]
+        );
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Error fetching chat history:', error);
+        res.status(500).json({ error: 'Gagal mengambil riwayat percakapan.' });
+    }
+});
 
 
-// === ROOT ROUTE ===
+// === ROOT & REDIRECT ===
 app.get('/', (req, res) => res.send('Halo dari Backend Server Node.js! Terhubung ke PostgreSQL.'));
 
-// === WILDCARD REDIRECT ROUTE ===
 app.get('/:slug', async (req, res) => {
     try {
         const { slug } = req.params;
@@ -979,4 +920,130 @@ app.get('/:slug', async (req, res) => {
     }
 });
 
-app.listen(PORT, () => console.log(`Server berjalan di port ${PORT}`));
+
+// ======================================================
+// === [BARU] INISIALISASI SERVER HTTP & WEBSOCKET ===
+// ======================================================
+
+const server = http.createServer(app);
+
+const allowedOrigins = [
+  'https://hamdirzl.my.id', 
+  'https://www.hamdirzl.my.id', 
+  'https://hrportof.netlify.app'
+];
+
+const wss = new WebSocketServer({
+    server,
+    verifyClient: (info, done) => {
+        const origin = info.origin;
+        if (allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') { // Izinkan semua di development
+            done(true);
+        } else {
+            console.warn(`Koneksi WebSocket dari origin tidak diizinkan ditolak: ${origin}`);
+            done(false, 403, 'Origin not allowed');
+        }
+    }
+});
+
+const clients = new Map();
+let adminWs = null;
+
+wss.on('connection', (ws, req) => {
+    const urlParams = new URLSearchParams(req.url.slice(req.url.startsWith('/?') ? 2 : 1));
+    const token = urlParams.get('token');
+    let isThisAdmin = false;
+    let userId = '';
+
+    if (token) {
+        jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+            if (!err && user.role === 'admin') {
+                console.log('Admin terhubung ke WebSocket.');
+                adminWs = ws;
+                isThisAdmin = true;
+                ws.send(JSON.stringify({ type: 'admin_connected' }));
+
+                clients.forEach((clientData) => {
+                    if (clientData.ws.readyState === ws.OPEN) {
+                        clientData.ws.send(JSON.stringify({ type: 'status_update', status: 'terhubung' }));
+                    }
+                });
+            }
+        });
+    }
+    
+    if (!isThisAdmin) {
+        userId = crypto.randomUUID();
+        clients.set(userId, { ws: ws, conversationId: userId }); // Simpan ws dan ID percakapan
+        console.log(`Pengunjung baru terhubung dengan ID: ${userId}`);
+        ws.send(JSON.stringify({ type: 'init', userId: userId }));
+        
+        if (adminWs && adminWs.readyState === ws.OPEN) {
+             ws.send(JSON.stringify({ type: 'status_update', status: 'terhubung', initial: true }));
+        } else {
+             ws.send(JSON.stringify({ type: 'status_update', status: 'menghubungi', initial: true }));
+        }
+    }
+
+    ws.on('message', (message) => {
+        try {
+            const data = JSON.parse(message);
+
+            if (isThisAdmin) {
+                if (data.type === 'admin_message' && data.targetUserId) {
+                    const clientData = clients.get(data.targetUserId);
+                    if (clientData && clientData.ws.readyState === ws.OPEN) {
+                        clientData.ws.send(JSON.stringify({ type: 'chat', sender: 'admin', content: data.content }));
+                        
+                        pool.query(
+                            'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content) VALUES ($1, $2, $3, $4)',
+                            [data.targetUserId, 'admin', 'admin', data.content]
+                        ).catch(err => console.error("Gagal simpan pesan admin ke DB:", err));
+                    }
+                }
+            } else {
+                if (data.type === 'user_message') {
+                    if (adminWs && adminWs.readyState === ws.OPEN) {
+                        adminWs.send(JSON.stringify({ type: 'chat', sender: userId, content: data.content }));
+                        ws.send(JSON.stringify({ type: 'status_update', status: 'terhubung' }));
+                    } else {
+                        ws.send(JSON.stringify({ type: 'status_update', status: 'menghubungi' }));
+                    }
+
+                    pool.query(
+                        'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content) VALUES ($1, $2, $3, $4)',
+                        [userId, userId, 'user', data.content]
+                    ).catch(err => console.error("Gagal simpan pesan user ke DB:", err));
+                }
+            }
+        } catch (e) {
+            console.error("Gagal memproses pesan WebSocket:", e);
+        }
+    });
+
+    ws.on('close', () => {
+        if (isThisAdmin) {
+            console.log('Admin terputus dari WebSocket.');
+            adminWs = null;
+             clients.forEach((clientData) => {
+                if (clientData.ws.readyState === ws.OPEN) {
+                   clientData.ws.send(JSON.stringify({ type: 'status_update', status: 'menghubungi' }));
+                }
+            });
+        } else {
+            console.log(`Pengunjung dengan ID ${userId} terputus.`);
+            if (adminWs && adminWs.readyState === ws.OPEN) {
+                adminWs.send(JSON.stringify({ type: 'user_disconnected', userId: userId }));
+            }
+            clients.delete(userId);
+        }
+    });
+    
+    ws.on('error', (error) => {
+        console.error(`WebSocket Error: ${error}`);
+    });
+});
+
+server.listen(PORT, () => {
+    console.log(`Server HTTP & WebSocket berjalan di port ${PORT}`);
+});

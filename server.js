@@ -1023,55 +1023,69 @@ wss.on('connection', (ws, req) => {
     }
 
     ws.on('message', (message) => {
-        try {
-            const data = JSON.parse(message);
-            if (ws.isAdmin) {
-                if (data.type === 'admin_message' && data.targetUserId) {
-                    const clientData = clients.get(data.targetUserId);
-                    if (clientData && clientData.ws.readyState === WebSocket.OPEN) {
-                        clientData.ws.send(JSON.stringify({ type: 'chat', sender: 'admin', content: data.content }));
-                        pool.query(
-                            'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content) VALUES ($1, $2, $3, $4)',
-                            [data.targetUserId, 'admin', 'admin', data.content]
-                        ).catch(err => console.error("Gagal simpan pesan admin ke DB:", err));
-                    }
-                } else if (data.type === 'typing' && data.targetUserId) {
-                    const clientData = clients.get(data.targetUserId);
-                    if (clientData && clientData.ws.readyState === WebSocket.OPEN) {
-                        clientData.ws.send(JSON.stringify({ type: 'typing', isTyping: data.isTyping }));
-                    }
-                }
-                return;
-            }
+    try {
+        const data = JSON.parse(message);
 
-            if (data.type === 'identify') {
+        // Langsung tangani pesan dari admin dan hentikan eksekusi
+        if (ws.isAdmin) {
+            if (data.type === 'admin_message' && data.targetUserId) {
+                const clientData = clients.get(data.targetUserId);
+                if (clientData && clientData.ws.readyState === WebSocket.OPEN) {
+                    clientData.ws.send(JSON.stringify({ type: 'chat', sender: 'admin', content: data.content }));
+                    pool.query(
+                        'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content) VALUES ($1, $2, $3, $4)',
+                        [data.targetUserId, 'admin', 'admin', data.content]
+                    ).catch(err => console.error("Gagal simpan pesan admin ke DB:", err));
+                }
+            } else if (data.type === 'typing' && data.targetUserId) {
+                const clientData = clients.get(data.targetUserId);
+                if (clientData && clientData.ws.readyState === WebSocket.OPEN) {
+                    clientData.ws.send(JSON.stringify({ type: 'typing', isTyping: data.isTyping }));
+                }
+            }
+            // Hentikan fungsi di sini jika yang mengirim adalah admin
+            return;
+        }
+        
+        // Logika untuk pesan dari pengguna (non-admin)
+        switch (data.type) {
+            case 'identify':
                 ws.userId = data.session.userId;
                 ws.userName = data.session.userName;
                 clients.set(ws.userId, { ws: ws, name: ws.userName });
                 console.log(`Pengunjung teridentifikasi: ${ws.userName} (ID: ${ws.userId})`);
+                
+                // Kirim status 'terhubung' jika admin online
                 if (adminWs && adminWs.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({ type: 'status_update', status: 'terhubung' }));
                 } else {
                     ws.send(JSON.stringify({ type: 'status_update', status: 'menghubungi' }));
                 }
-            } else if (data.type === 'user_message') {
+                break;
+
+            case 'user_message':
+                // Pastikan koneksi ini sudah teridentifikasi sebelum memproses pesan
                 if (!ws.userId) {
                     console.log('Pesan dari klien yang belum teridentifikasi diabaikan.');
-                    return;
+                    return; // Abaikan pesan jika belum ada ID
                 }
-                const clientInfo = clients.get(ws.userId);
-                const userName = clientInfo ? clientInfo.name : 'Pengunjung';
+
+                // Kirim pesan ke admin jika online, jika tidak kirim notifikasi Telegram
                 if (adminWs && adminWs.readyState === WebSocket.OPEN) {
-                    adminWs.send(JSON.stringify({ type: 'chat', sender: ws.userId, content: data.content, userName: userName }));
+                    adminWs.send(JSON.stringify({ type: 'chat', sender: ws.userId, content: data.content, userName: ws.userName }));
                 } else {
-                    const notifMessage = `Pesan Baru dari ${userName}\nID: ${ws.userId}\n\nPesan: ${data.content}`;
+                    const notifMessage = `Pesan Baru dari ${ws.userName}\nID: ${ws.userId}\n\nPesan: ${data.content}`;
                     sendTelegramNotification(notifMessage);
                 }
+
+                // Simpan pesan pengguna ke database
                 pool.query(
                     'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content) VALUES ($1, $2, $3, $4)',
                     [ws.userId, ws.userId, 'user', data.content]
                 ).catch(err => console.error("Gagal simpan pesan user ke DB:", err));
-            } else if (data.type === 'typing') {
+                break;
+
+            case 'typing':
                 if (adminWs && adminWs.readyState === WebSocket.OPEN) {
                     adminWs.send(JSON.stringify({ 
                         type: 'typing', 
@@ -1079,11 +1093,12 @@ wss.on('connection', (ws, req) => {
                         isTyping: data.isTyping 
                     }));
                 }
-            }
-        } catch (e) {
-            console.error("Gagal memproses pesan WebSocket:", e);
+                break;
         }
-    });
+    } catch (e) {
+        console.error("Gagal memproses pesan WebSocket:", e);
+    }
+});
 
     ws.on('close', () => {
         if (ws.isAdmin) {

@@ -1,4 +1,4 @@
-// VERSI FINAL DAN LENGKAP - DENGAN INTEGRASI SUPABASE STORAGE & LIVE CHAT (PERSISTENT)
+// VERSI FINAL DAN LENGKAP - DENGAN SEMUA PERBAIKAN
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -107,7 +107,8 @@ const upload = multer({ dest: 'uploads/' });
 fs.mkdir('uploads', { recursive: true }).catch(console.error);
 fs.mkdir(path.join(__dirname, 'public', 'uploads'), { recursive: true }).catch(console.error);
 
-// === ROUTES ===
+// === ROUTES (Semua app.get, app.post, dll) ===
+// ... (semua route Anda dari /api/register hingga /api/admin/chat/history/:conversationId tetap sama)
 app.post('/api/register', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -615,7 +616,6 @@ app.get('/api/jurnal/:id', async (req, res) => {
     }
 });
 
-// Admin Routes
 app.get('/api/links', authenticateAdmin, async (req, res) => {
     try {
         const { search = '' } = req.query;
@@ -930,11 +930,17 @@ app.post('/api/telegram/webhook', (req, res) => {
             const clientData = clients.get(targetUserId);
 
             if (clientData && clientData.ws.readyState === WebSocket.OPEN) {
+                
+                // Kirim pembaruan status terlebih dahulu untuk memberitahu klien bahwa admin sudah terhubung
+                clientData.ws.send(JSON.stringify({ type: 'status_update', status: 'terhubung' }));
+                
+                // Kemudian kirim pesan balasan dari admin
                 clientData.ws.send(JSON.stringify({
                     type: 'chat',
                     sender: 'admin',
                     content: adminReply
                 }));
+
                 console.log(`Balasan dari Telegram untuk ${targetUserId} berhasil diteruskan.`);
             } else {
                 console.log(`Gagal meneruskan balasan dari Telegram, pengunjung ${targetUserId} sudah offline atau tidak ditemukan.`);
@@ -955,16 +961,9 @@ app.post('/api/telegram/webhook', (req, res) => {
 
 app.get('/', (req, res) => res.send('Halo dari Backend Server Node.js! Terhubung ke PostgreSQL.'));
 
-
-// === PERBAIKAN UTAMA: URUTAN ROUTE ===
-// Route yang lebih spesifik harus diletakkan SEBELUM route yang lebih umum (catch-all).
-// Ini memastikan permintaan ke '/api/chat/history/...' tidak akan ditangkap oleh '/:slug'.
-
-// Endpoint untuk mengambil riwayat chat publik
 app.get('/api/chat/history/:conversationId', async (req, res) => {
     try {
         const { conversationId } = req.params;
-        // Validasi format UUID untuk keamanan dasar
         if (!/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(conversationId)) {
             return res.status(400).json({ error: 'Format ID percakapan tidak valid.' });
         }
@@ -979,7 +978,6 @@ app.get('/api/chat/history/:conversationId', async (req, res) => {
     }
 });
 
-// Route 'catch-all' untuk slug URL Shortener
 app.get('/:slug', async (req, res) => {
     try {
         const { slug } = req.params;
@@ -997,32 +995,20 @@ app.get('/:slug', async (req, res) => {
 });
 
 
+// === Inisialisasi Server & WebSocket ===
 const server = http.createServer(app);
-
-const wss = new WebSocket.Server({
-    server,
-    verifyClient: (info, done) => {
-        const origin = info.origin;
-        if (allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
-            done(true);
-        } else {
-            console.warn(`Koneksi WebSocket dari origin tidak diizinkan ditolak: ${origin}`);
-            done(false, 403, 'Origin not allowed');
-        }
-    }
-});
-
+const wss = new WebSocket.Server({ server });
 let adminWs = null;
 const clients = new Map();
 
+// Fungsi Heartbeat untuk menjaga koneksi WebSocket
 function heartbeat() {
   this.isAlive = true;
 }
 
-// Logika WebSocket Server
 wss.on('connection', (ws, req) => {
     ws.isAlive = true;
-    ws.on('pong', heartbeat); // Klien merespons ping, set isAlive jadi true
+    ws.on('pong', heartbeat);
 
     const urlParams = new URLSearchParams(req.url.slice(req.url.startsWith('/?') ? 2 : 1));
     const token = urlParams.get('token');
@@ -1034,7 +1020,6 @@ wss.on('connection', (ws, req) => {
                 ws.isAdmin = true;
                 adminWs = ws;
                 ws.send(JSON.stringify({ type: 'admin_connected' }));
-
                 clients.forEach((clientData) => {
                     if (clientData.ws.readyState === WebSocket.OPEN) {
                         clientData.ws.send(JSON.stringify({ type: 'status_update', status: 'terhubung' }));
@@ -1047,7 +1032,6 @@ wss.on('connection', (ws, req) => {
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
-
             if (ws.isAdmin) {
                 if (data.type === 'admin_message' && data.targetUserId) {
                     const clientData = clients.get(data.targetUserId);
@@ -1058,6 +1042,11 @@ wss.on('connection', (ws, req) => {
                             [data.targetUserId, 'admin', 'admin', data.content]
                         ).catch(err => console.error("Gagal simpan pesan admin ke DB:", err));
                     }
+                } else if (data.type === 'typing' && data.targetUserId) {
+                    const clientData = clients.get(data.targetUserId);
+                    if (clientData && clientData.ws.readyState === WebSocket.OPEN) {
+                        clientData.ws.send(JSON.stringify({ type: 'typing', isTyping: data.isTyping }));
+                    }
                 }
                 return;
             }
@@ -1067,7 +1056,6 @@ wss.on('connection', (ws, req) => {
                 ws.userName = data.session.userName;
                 clients.set(ws.userId, { ws: ws, name: ws.userName });
                 console.log(`Pengunjung teridentifikasi: ${ws.userName} (ID: ${ws.userId})`);
-
                 if (adminWs && adminWs.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({ type: 'status_update', status: 'terhubung' }));
                 } else {
@@ -1078,21 +1066,26 @@ wss.on('connection', (ws, req) => {
                     console.log('Pesan dari klien yang belum teridentifikasi diabaikan.');
                     return;
                 }
-
                 const clientInfo = clients.get(ws.userId);
                 const userName = clientInfo ? clientInfo.name : 'Pengunjung';
-
                 if (adminWs && adminWs.readyState === WebSocket.OPEN) {
                     adminWs.send(JSON.stringify({ type: 'chat', sender: ws.userId, content: data.content, userName: userName }));
                 } else {
                     const notifMessage = `Pesan Baru dari ${userName}\nID: ${ws.userId}\n\nPesan: ${data.content}`;
                     sendTelegramNotification(notifMessage);
                 }
-
                 pool.query(
                     'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content) VALUES ($1, $2, $3, $4)',
                     [ws.userId, ws.userId, 'user', data.content]
                 ).catch(err => console.error("Gagal simpan pesan user ke DB:", err));
+            } else if (data.type === 'typing') {
+                if (adminWs && adminWs.readyState === WebSocket.OPEN) {
+                    adminWs.send(JSON.stringify({ 
+                        type: 'typing', 
+                        userId: ws.userId, 
+                        isTyping: data.isTyping 
+                    }));
+                }
             }
         } catch (e) {
             console.error("Gagal memproses pesan WebSocket:", e);
@@ -1112,14 +1105,13 @@ wss.on('connection', (ws, req) => {
             const clientInfo = clients.get(ws.userId);
             const userName = clientInfo ? clientInfo.name : 'Pengunjung tak dikenal';
             console.log(`Pengunjung ${userName} (ID: ${ws.userId}) terputus.`);
-
             if (adminWs && adminWs.readyState === WebSocket.OPEN) {
                 adminWs.send(JSON.stringify({ type: 'user_disconnected', userId: ws.userId }));
             }
             clients.delete(ws.userId);
         }
     });
-
+    
     ws.on('error', (error) => {
         console.error(`WebSocket Error: ${error}`);
     });
@@ -1128,21 +1120,16 @@ wss.on('connection', (ws, req) => {
 const interval = setInterval(function ping() {
   wss.clients.forEach(function each(ws) {
     if (ws.isAlive === false) return ws.terminate();
-
     ws.isAlive = false;
     ws.ping(function noop() {});
   });
-}, 30000); // Kirim ping setiap 30 detik
+}, 30000);
 
 wss.on('close', function close() {
   clearInterval(interval);
 });
 
-// Blok server.listen(...) Anda
-server.listen(PORT, () => {
-    console.log(`Server HTTP & WebSocket berjalan di port ${PORT}`);
-});
-
+// Panggilan server.listen HANYA SATU KALI di akhir file
 server.listen(PORT, () => {
     console.log(`Server HTTP & WebSocket berjalan di port ${PORT}`);
 });

@@ -1015,8 +1015,15 @@ const wss = new WebSocket.Server({
 let adminWs = null;
 const clients = new Map();
 
+function heartbeat() {
+  this.isAlive = true;
+}
+
 // Logika WebSocket Server
 wss.on('connection', (ws, req) => {
+    ws.isAlive = true;
+    ws.on('pong', heartbeat); // Klien merespons ping, set isAlive jadi true
+
     const urlParams = new URLSearchParams(req.url.slice(req.url.startsWith('/?') ? 2 : 1));
     const token = urlParams.get('token');
 
@@ -1074,7 +1081,7 @@ wss.on('connection', (ws, req) => {
 
                 const clientInfo = clients.get(ws.userId);
                 const userName = clientInfo ? clientInfo.name : 'Pengunjung';
-                
+
                 if (adminWs && adminWs.readyState === WebSocket.OPEN) {
                     adminWs.send(JSON.stringify({ type: 'chat', sender: ws.userId, content: data.content, userName: userName }));
                 } else {
@@ -1105,17 +1112,35 @@ wss.on('connection', (ws, req) => {
             const clientInfo = clients.get(ws.userId);
             const userName = clientInfo ? clientInfo.name : 'Pengunjung tak dikenal';
             console.log(`Pengunjung ${userName} (ID: ${ws.userId}) terputus.`);
-            
+
             if (adminWs && adminWs.readyState === WebSocket.OPEN) {
                 adminWs.send(JSON.stringify({ type: 'user_disconnected', userId: ws.userId }));
             }
             clients.delete(ws.userId);
         }
     });
-    
+
     ws.on('error', (error) => {
         console.error(`WebSocket Error: ${error}`);
     });
+});
+
+const interval = setInterval(function ping() {
+  wss.clients.forEach(function each(ws) {
+    if (ws.isAlive === false) return ws.terminate();
+
+    ws.isAlive = false;
+    ws.ping(function noop() {});
+  });
+}, 30000); // Kirim ping setiap 30 detik
+
+wss.on('close', function close() {
+  clearInterval(interval);
+});
+
+// Blok server.listen(...) Anda
+server.listen(PORT, () => {
+    console.log(`Server HTTP & WebSocket berjalan di port ${PORT}`);
 });
 
 server.listen(PORT, () => {

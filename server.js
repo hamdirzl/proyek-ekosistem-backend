@@ -1032,7 +1032,7 @@ app.post('/api/telegram/webhook', async (req, res) => { // Tambahkan async di si
         }
     }
 
-    res.sendStatus(200);
+    res.sendStatus(200); // Selalu kirim status 200 OK ke Telegram
 });
 
 app.get('/', (req, res) => res.send('Halo dari Backend Server Node.js! Terhubung ke PostgreSQL.'));

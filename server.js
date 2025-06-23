@@ -958,39 +958,77 @@ app.get('/api/admin/chat/history/:conversationId', authenticateAdmin, async (req
     }
 });
 
-app.post('/api/telegram/webhook', (req, res) => {
+app.post('/api/telegram/webhook', async (req, res) => { // Tambahkan async di sini
     const { message } = req.body;
+    const token = process.env.TELEGRAM_BOT_TOKEN;
 
+    // Pastikan ini adalah pesan balasan dari admin
     if (message && message.reply_to_message && message.chat.id.toString() === process.env.TELEGRAM_CHAT_ID) {
+        
         const originalText = message.reply_to_message.text;
-        const adminReply = message.text;
-
         const match = originalText.match(/ID: ([\w-]+)/);
+
         if (match && match[1]) {
             const targetUserId = match[1];
-            const clientData = clients.get(targetUserId);
+            let content;
+            let messageType;
 
-            if (clientData && clientData.ws.readyState === WebSocket.OPEN) {
-                clientData.ws.send(JSON.stringify({ type: 'status_update', status: 'terhubung' }));
-                clientData.ws.send(JSON.stringify({
-                    type: 'chat',
-                    sender: 'admin',
-                    content: adminReply,
-                    messageType: 'text' // [MODIFIKASI] Asumsikan balasan dari telegram selalu teks
-                }));
-                console.log(`Balasan dari Telegram untuk ${targetUserId} berhasil diteruskan.`);
-            } else {
-                console.log(`Gagal meneruskan balasan dari Telegram, pengunjung ${targetUserId} sudah offline atau tidak ditemukan.`);
+            try {
+                // Langkah 1: Deteksi tipe pesan dan dapatkan kontennya
+                if (message.text) {
+                    messageType = 'text';
+                    content = message.text;
+                } else if (message.photo) {
+                    // Jika foto, ambil file_id dari resolusi tertinggi
+                    const file_id = message.photo[message.photo.length - 1].file_id;
+                    messageType = 'image';
+                    
+                    // Langkah 2: Dapatkan path file dari API Telegram
+                    const fileResponse = await axios.get(`https://api.telegram.org/bot${token}/getFile?file_id=${file_id}`);
+                    const file_path = fileResponse.data.result.file_path;
+                    
+                    // Langkah 3: Bangun URL file lengkapnya
+                    content = `https://api.telegram.org/file/bot${token}/${file_path}`;
+
+                } else if (message.voice) {
+                    const file_id = message.voice.file_id;
+                    messageType = 'audio';
+
+                    const fileResponse = await axios.get(`https://api.telegram.org/bot${token}/getFile?file_id=${file_id}`);
+                    const file_path = fileResponse.data.result.file_path;
+                    content = `https://api.telegram.org/file/bot${token}/${file_path}`;
+                }
+
+                // Jika ada konten yang berhasil didapat
+                if (content && messageType) {
+                    const clientData = clients.get(targetUserId);
+
+                    // Kirim ke pengguna melalui WebSocket
+                    if (clientData && clientData.ws.readyState === WebSocket.OPEN) {
+                        clientData.ws.send(JSON.stringify({ type: 'status_update', status: 'terhubung' }));
+                        clientData.ws.send(JSON.stringify({
+                            type: 'chat',
+                            sender: 'admin',
+                            content: content,
+                            messageType: messageType // Gunakan tipe dinamis
+                        }));
+                        console.log(`Balasan [${messageType}] dari Telegram untuk ${targetUserId} berhasil diteruskan.`);
+                    } else {
+                        console.log(`Gagal meneruskan balasan [${messageType}], pengunjung ${targetUserId} sudah offline.`);
+                    }
+
+                    // Simpan ke database dengan tipe yang benar
+                    pool.query(
+                        'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content, message_type) VALUES ($1, $2, $3, $4, $5)',
+                        [targetUserId, 'admin', 'admin', content, messageType]
+                    ).catch(err => console.error("Gagal simpan balasan admin dari Telegram ke DB:", err));
+                }
+
+            } catch (error) {
+                console.error("Gagal memproses balasan dari Telegram:", error.message);
             }
-            
-            // [MODIFIKASI] Tambahkan message_type saat menyimpan balasan admin
-            pool.query(
-                'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content, message_type) VALUES ($1, $2, $3, $4, $5)',
-                [targetUserId, 'admin', 'admin', adminReply, 'text']
-            ).catch(err => console.error("Gagal simpan balasan admin dari Telegram ke DB:", err));
-
         } else {
-             console.log("GAGAL: Tidak bisa mengekstrak targetUserId dari pesan balasan.");
+             console.log("Webhook diterima, tapi bukan format balasan yang diharapkan.");
         }
     }
 

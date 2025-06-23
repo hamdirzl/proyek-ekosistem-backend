@@ -903,7 +903,7 @@ app.delete('/api/admin/jurnal/:id', authenticateAdmin, async (req, res) => {
 });
 
 // [BARU] ENDPOINT UNTUK UPLOAD FILE CHAT
-app.post('/api/chat/upload', authenticateToken, upload.single('file'), async (req, res) => {
+app.post('/api/chat/upload', upload.single('file'), async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: 'File tidak ditemukan.' });

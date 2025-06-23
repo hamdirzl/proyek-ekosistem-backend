@@ -1,9 +1,11 @@
-// VERSI FINAL DAN LENGKAP - DENGAN SEMUA PERBAIKAN + FITUR CHAT GAMBAR/SUARA
+// =========================================================================
+// ==              SERVER.JS FINAL (DENGAN GOOGLE LOGIN)                ==
+// =========================================================================
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
-const jwt =require('jsonwebtoken');
+const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const { Pool } = require('pg');
@@ -19,6 +21,11 @@ const sanitizeHtml = require('sanitize-html');
 const http = require('http');
 const WebSocket = require('ws');
 const axios = require('axios');
+
+// [BARU] Import library untuk Google Auth
+const passport = require('passport');
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
+const session = require('express-session');
 
 // Inisialisasi Supabase Client
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
@@ -85,29 +92,113 @@ function authenticateAdmin(req, res, next) {
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.set('trust proxy', true);
+app.set('trust proxy', 1); 
 
 const allowedOrigins = [
-    'https://hamdirzl.my.id', 
-    'https://www.hamdirzl.my.id', 
+    'https://hamdirzl.my.id',
+    'https://www.hamdirzl.my.id',
     'https://hrportof.netlify.app'
-  ];
+];
 
 app.use(cors({
   origin: allowedOrigins,
   exposedHeaders: ['Content-Disposition', 'X-Original-Size', 'X-Compressed-Size']
 }));
 
-
 app.use(express.json());
-
 app.use('/public', express.static(path.join(__dirname, 'public')));
+
+// [BARU] Inisialisasi untuk Sesi dan Passport
+app.use(session({
+  secret: process.env.SESSION_SECRET,
+  resave: false,
+  saveUninitialized: true,
+  cookie: { secure: process.env.NODE_ENV === 'production' }
+}));
+
+app.use(passport.initialize());
+app.use(passport.session());
 
 const upload = multer({ dest: 'uploads/' });
 fs.mkdir('uploads', { recursive: true }).catch(console.error);
 fs.mkdir(path.join(__dirname, 'public', 'uploads'), { recursive: true }).catch(console.error);
 
+// [BARU] Konfigurasi Strategi Google OAuth 2.0
+passport.use(new GoogleStrategy({
+    clientID: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    callbackURL: `${process.env.API_BASE_URL || 'http://localhost:3000'}/auth/google/callback`,
+    scope: ['profile', 'email']
+  },
+  async (accessToken, refreshToken, profile, done) => {
+    const googleId = profile.id;
+    const email = profile.emails[0].value;
+    
+    try {
+      let userResult = await pool.query('SELECT * FROM users WHERE google_id = $1', [googleId]);
+      let user = userResult.rows[0];
+
+      if (user) {
+        return done(null, user);
+      } else {
+        userResult = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+        user = userResult.rows[0];
+        
+        if (user) {
+          await pool.query('UPDATE users SET google_id = $1 WHERE email = $2', [googleId, email]);
+          user.google_id = googleId;
+        } else {
+          const newUserResult = await pool.query(
+            'INSERT INTO users (email, google_id) VALUES ($1, $2) RETURNING *',
+            [email, googleId]
+          );
+          user = newUserResult.rows[0];
+        }
+        return done(null, user);
+      }
+    } catch (err) {
+      return done(err, null);
+    }
+  }
+));
+
+// [BARU] Serialisasi dan Deserialisasi user untuk session
+passport.serializeUser((user, done) => {
+  done(null, user.id);
+});
+
+passport.deserializeUser(async (id, done) => {
+  try {
+    const result = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
+    done(null, result.rows[0]);
+  } catch (err) {
+    done(err, null);
+  }
+});
+
+
 // === ROUTES (Semua app.get, app.post, dll) ===
+
+// [BARU] Route untuk memulai proses login Google
+app.get('/auth/google',
+  passport.authenticate('google'));
+
+// [BARU] Route callback yang dituju Google setelah user login
+app.get('/auth/google/callback', 
+  passport.authenticate('google', { failureRedirect: 'https://hamdirzl.my.id/auth.html?error=google-login-failed' }),
+  async (req, res) => {
+    const userPayload = { id: req.user.id, email: req.user.email, role: req.user.role };
+    
+    const accessToken = jwt.sign(userPayload, process.env.JWT_SECRET, { expiresIn: '15m' });
+    const refreshToken = jwt.sign(userPayload, process.env.JWT_REFRESH_SECRET, { expiresIn: '90d' });
+
+    await pool.query('UPDATE users SET refresh_token = $1 WHERE id = $2', [refreshToken, req.user.id]);
+    
+    res.redirect(`https://hamdirzl.my.id/auth-callback.html?accessToken=${accessToken}&refreshToken=${refreshToken}`);
+  }
+);
+
+
 app.post('/api/register', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -132,6 +223,10 @@ app.post('/api/login', async (req, res) => {
         const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
         const user = result.rows[0];
         if (!user) return res.status(401).json({ error: 'Email atau password salah.' });
+        
+        if (!user.password_hash) {
+            return res.status(401).json({ error: 'Akun ini terdaftar melalui Google. Silakan login dengan Google.' });
+        }
 
         const isPasswordCorrect = await bcrypt.compare(password, user.password_hash);
         if (!isPasswordCorrect) return res.status(401).json({ error: 'Email atau password salah.' });
@@ -902,7 +997,6 @@ app.delete('/api/admin/jurnal/:id', authenticateAdmin, async (req, res) => {
     }
 });
 
-// [BARU] ENDPOINT UNTUK UPLOAD FILE CHAT
 app.post('/api/chat/upload', upload.single('file'), async (req, res) => {
     try {
         if (!req.file) {
@@ -910,11 +1004,9 @@ app.post('/api/chat/upload', upload.single('file'), async (req, res) => {
         }
 
         const fileContent = await fs.readFile(req.file.path);
-        // Simpan di folder khusus untuk lampiran chat
         const newFileName = `chat-attachments/${Date.now()}-${req.file.originalname.replace(/\s+/g, '_')}`;
         const filePathInBucket = `public/${newFileName}`;
 
-        // Menggunakan bucket yang sama, tetapi dengan path folder yang berbeda
         const { error: uploadError } = await supabase.storage
             .from('proyek-hamdi-web-2025')
             .upload(filePathInBucket, fileContent, {
@@ -925,10 +1017,8 @@ app.post('/api/chat/upload', upload.single('file'), async (req, res) => {
             throw uploadError;
         }
 
-        // Hapus file sementara setelah diunggah
         await fs.unlink(req.file.path);
 
-        // Dapatkan URL publik dari file yang baru diunggah
         const { data: publicUrlData } = supabase.storage
             .from('proyek-hamdi-web-2025')
             .getPublicUrl(filePathInBucket);
@@ -958,11 +1048,10 @@ app.get('/api/admin/chat/history/:conversationId', authenticateAdmin, async (req
     }
 });
 
-app.post('/api/telegram/webhook', async (req, res) => { // Tambahkan async di sini
+app.post('/api/telegram/webhook', async (req, res) => {
     const { message } = req.body;
     const token = process.env.TELEGRAM_BOT_TOKEN;
 
-    // Pastikan ini adalah pesan balasan dari admin
     if (message && message.reply_to_message && message.chat.id.toString() === process.env.TELEGRAM_CHAT_ID) {
         
         const originalText = message.reply_to_message.text;
@@ -974,20 +1063,16 @@ app.post('/api/telegram/webhook', async (req, res) => { // Tambahkan async di si
             let messageType;
 
             try {
-                // Langkah 1: Deteksi tipe pesan dan dapatkan kontennya
                 if (message.text) {
                     messageType = 'text';
                     content = message.text;
                 } else if (message.photo) {
-                    // Jika foto, ambil file_id dari resolusi tertinggi
                     const file_id = message.photo[message.photo.length - 1].file_id;
                     messageType = 'image';
                     
-                    // Langkah 2: Dapatkan path file dari API Telegram
                     const fileResponse = await axios.get(`https://api.telegram.org/bot${token}/getFile?file_id=${file_id}`);
                     const file_path = fileResponse.data.result.file_path;
                     
-                    // Langkah 3: Bangun URL file lengkapnya
                     content = `https://api.telegram.org/file/bot${token}/${file_path}`;
 
                 } else if (message.voice) {
@@ -999,25 +1084,22 @@ app.post('/api/telegram/webhook', async (req, res) => { // Tambahkan async di si
                     content = `https://api.telegram.org/file/bot${token}/${file_path}`;
                 }
 
-                // Jika ada konten yang berhasil didapat
                 if (content && messageType) {
                     const clientData = clients.get(targetUserId);
 
-                    // Kirim ke pengguna melalui WebSocket
                     if (clientData && clientData.ws.readyState === WebSocket.OPEN) {
                         clientData.ws.send(JSON.stringify({ type: 'status_update', status: 'terhubung' }));
                         clientData.ws.send(JSON.stringify({
                             type: 'chat',
                             sender: 'admin',
                             content: content,
-                            messageType: messageType // Gunakan tipe dinamis
+                            messageType: messageType
                         }));
                         console.log(`Balasan [${messageType}] dari Telegram untuk ${targetUserId} berhasil diteruskan.`);
                     } else {
                         console.log(`Gagal meneruskan balasan [${messageType}], pengunjung ${targetUserId} sudah offline.`);
                     }
 
-                    // Simpan ke database dengan tipe yang benar
                     pool.query(
                         'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content, message_type) VALUES ($1, $2, $3, $4, $5)',
                         [targetUserId, 'admin', 'admin', content, messageType]
@@ -1032,7 +1114,7 @@ app.post('/api/telegram/webhook', async (req, res) => { // Tambahkan async di si
         }
     }
 
-    res.sendStatus(200); // Selalu kirim status 200 OK ke Telegram
+    res.sendStatus(200);
 });
 
 app.get('/', (req, res) => res.send('Halo dari Backend Server Node.js! Terhubung ke PostgreSQL.'));
@@ -1108,15 +1190,12 @@ wss.on('connection', (ws, req) => {
     try {
         const data = JSON.parse(message);
 
-        // BAGIAN 1: MENANGANI PESAN DARI KONEKSI ADMIN
         if (ws.isAdmin) {
-            console.log(`Admin sent: ${data.type}`); // Debugging
+            console.log(`Admin sent: ${data.type}`);
             if (data.type === 'admin_message' && data.targetUserId) {
                 const clientData = clients.get(data.targetUserId);
                 if (clientData && clientData.ws.readyState === WebSocket.OPEN) {
-                    // [MODIFIKASI] Teruskan messageType
                     clientData.ws.send(JSON.stringify({ type: 'chat', sender: 'admin', content: data.content, messageType: data.messageType || 'text' }));
-                    // [MODIFIKASI] Simpan messageType ke DB
                     pool.query(
                         'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content, message_type) VALUES ($1, $2, $3, $4, $5)',
                         [data.targetUserId, 'admin', 'admin', data.content, data.messageType || 'text']
@@ -1131,7 +1210,6 @@ wss.on('connection', (ws, req) => {
             return; 
         }
 
-        // BAGIAN 2: MENANGANI PESAN DARI KONEKSI PENGGUNA
         console.log(`User sent: ${data.type}`);
         switch (data.type) {
             case 'identify':
@@ -1150,7 +1228,7 @@ wss.on('connection', (ws, req) => {
             case 'user_message':
                 if (!ws.userId) return; 
 
-                const messageType = data.messageType || 'text'; // [MODIFIKASI] Dapatkan tipe pesan
+                const messageType = data.messageType || 'text';
                 const content = data.content;
 
                 if (adminWs && adminWs.readyState === WebSocket.OPEN) {
@@ -1160,7 +1238,6 @@ wss.on('connection', (ws, req) => {
                     const notifMessage = `Pesan Baru dari ${ws.userName}\nID: ${ws.userId}\n\nPesan: ${notifContent}`;
                     sendTelegramNotification(notifMessage);
                 }
-                // [MODIFIKASI] Simpan messageType ke DB
                 pool.query(
                     'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content, message_type) VALUES ($1, $2, $3, $4, $5)',
                     [ws.userId, ws.userId, 'user', content, messageType]
@@ -1220,7 +1297,6 @@ wss.on('close', function close() {
   clearInterval(interval);
 });
 
-// Panggilan server.listen HANYA SATU KALI di akhir file
 server.listen(PORT, () => {
     console.log(`Server HTTP & WebSocket berjalan di port ${PORT}`);
 });

@@ -958,12 +958,11 @@ app.get('/api/admin/chat/history/:conversationId', authenticateAdmin, async (req
     }
 });
 
-app.post('/api/telegram/webhook', async (req, res) => { // Pastikan ada async
+app.post('/api/telegram/webhook', async (req, res) => {
     const { message } = req.body;
     const token = process.env.TELEGRAM_BOT_TOKEN;
 
     if (message && message.reply_to_message && message.chat.id.toString() === process.env.TELEGRAM_CHAT_ID) {
-        
         const originalText = message.reply_to_message.text;
         const match = originalText.match(/ID: ([\w-]+)/);
 
@@ -976,41 +975,35 @@ app.post('/api/telegram/webhook', async (req, res) => { // Pastikan ada async
                 if (message.text) {
                     messageType = 'text';
                     content = message.text;
+                } else {
+                    let file_id;
+                    if (message.photo) {
+                        file_id = message.photo[message.photo.length - 1].file_id;
+                        messageType = 'image';
+                    } else if (message.voice || message.audio) {
+                        const audioSource = message.voice || message.audio;
+                        file_id = audioSource.file_id;
+                        messageType = 'audio';
+                    }
 
-                } else if (message.photo) {
-                    const file_id = message.photo[message.photo.length - 1].file_id;
-                    messageType = 'image';
-                    
-                    const fileResponse = await axios.get(`https://api.telegram.org/bot${token}/getFile?file_id=${file_id}`);
-                    const file_path = fileResponse.data.result.file_path;
-                    content = `https://api.telegram.org/file/bot${token}/${file_path}`;
-
-                } else if (message.voice || message.audio) { // <-- PERUBAHAN UTAMA DI SINI
-                    // Ini akan menangani rekaman suara (voice) dan file audio (audio)
-                    const audioSource = message.voice || message.audio;
-                    const file_id = audioSource.file_id;
-                    messageType = 'audio';
-
-                    const fileResponse = await axios.get(`https://api.telegram.org/bot${token}/getFile?file_id=${file_id}`);
-                    const file_path = fileResponse.data.result.file_path;
-                    content = `https://api.telegram.org/file/bot${token}/${file_path}`;
+                    if (file_id) {
+                        const fileResponse = await axios.get(`https://api.telegram.org/bot${token}/getFile?file_id=${file_id}`);
+                        const file_path = fileResponse.data.result.file_path;
+                        
+                        // [MODIFIKASI UTAMA] Gunakan URL proxy kita, bukan URL Telegram
+                        content = `${process.env.API_BASE_URL || API_BASE_URL}/api/media-proxy?path=${encodeURIComponent(file_path)}`;
+                    }
                 }
 
                 if (content && messageType) {
+                    // ... sisa kode untuk mengirim via WebSocket dan menyimpan ke DB sama persis ...
                     const clientData = clients.get(targetUserId);
-
                     if (clientData && clientData.ws.readyState === WebSocket.OPEN) {
                         clientData.ws.send(JSON.stringify({
-                            type: 'chat',
-                            sender: 'admin',
-                            content: content,
-                            messageType: messageType
+                            type: 'chat', sender: 'admin', content: content, messageType: messageType
                         }));
-                        console.log(`Balasan [${messageType}] dari Telegram untuk ${targetUserId} berhasil diteruskan.`);
-                    } else {
-                        console.log(`Gagal meneruskan balasan [${messageType}], pengunjung ${targetUserId} sudah offline.`);
+                        console.log(`Balasan [${messageType}] (via proxy) diteruskan ke ${targetUserId}.`);
                     }
-
                     pool.query(
                         'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content, message_type) VALUES ($1, $2, $3, $4, $5)',
                         [targetUserId, 'admin', 'admin', content, messageType]
@@ -1022,7 +1015,6 @@ app.post('/api/telegram/webhook', async (req, res) => { // Pastikan ada async
             }
         }
     }
-
     res.sendStatus(200);
 });
 
@@ -1042,6 +1034,36 @@ app.get('/api/chat/history/:conversationId', async (req, res) => {
     } catch (error) {
         console.error('Error fetching public chat history:', error);
         res.status(500).json({ error: 'Gagal mengambil riwayat percakapan.' });
+    }
+});
+
+// [BARU] ENDPOINT PROXY UNTUK MEDIA TELEGRAM
+app.get('/api/media-proxy', async (req, res) => {
+    const { path } = req.query; // Menerima file_path dari query parameter
+    if (!path) {
+        return res.status(400).send('File path is required');
+    }
+
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    const fileUrl = `https://api.telegram.org/file/bot${token}/${path}`;
+
+    try {
+        // Minta file dari Telegram sebagai stream
+        const telegramResponse = await axios({
+            method: 'get',
+            url: fileUrl,
+            responseType: 'stream'
+        });
+
+        // Set header content-type dari respons telegram agar browser tahu ini file apa
+        res.setHeader('Content-Type', telegramResponse.headers['content-type']);
+        
+        // Alirkan (pipe) data dari Telegram langsung ke response untuk pengguna
+        telegramResponse.data.pipe(res);
+
+    } catch (error) {
+        console.error('Error proxying media from Telegram:', error.message);
+        res.status(502).send('Failed to fetch media from Telegram');
     }
 });
 

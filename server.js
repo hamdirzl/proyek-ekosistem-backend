@@ -576,6 +576,66 @@ app.post('/api/convert', upload.single('file'), async (req, res) => {
     }
 });
 
+app.post('/api/convert/images-to-pdf', upload.array('files'), async (req, res) => {
+    // upload.array('files') akan menangani upload beberapa file dengan nama field 'files'
+    if (!req.files || req.files.length === 0) {
+        return res.status(400).json({ error: 'Tidak ada file gambar yang diunggah.' });
+    }
+
+    const tempFilePaths = req.files.map(file => file.path);
+
+    try {
+        // Buat dokumen PDF baru
+        const pdfDoc = await PDFDocument.create();
+
+        for (const file of req.files) {
+            const filePath = file.path;
+            const imageBytes = await fs.readFile(filePath);
+            
+            let image;
+            // Cek tipe file untuk memilih metode embed yang tepat
+            if (file.mimetype === 'image/jpeg' || file.mimetype === 'image/jpg') {
+                image = await pdfDoc.embedJpg(imageBytes);
+            } else if (file.mimetype === 'image/png') {
+                image = await pdfDoc.embedPng(imageBytes);
+            } else {
+                // Lewati file yang tidak didukung
+                console.warn(`Melewati format file yang tidak didukung: ${file.mimetype}`);
+                continue;
+            }
+
+            // Tambahkan halaman baru seukuran gambar
+            const page = pdfDoc.addPage([image.width, image.height]);
+
+            // Gambar gambar tersebut di halaman baru
+            page.drawImage(image, {
+                x: 0,
+                y: 0,
+                width: image.width,
+                height: image.height,
+            });
+        }
+
+        // Simpan PDF ke dalam buffer
+        const pdfBytes = await pdfDoc.save();
+
+        // Kirim file PDF sebagai respons
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', 'attachment; filename="hasil-gabungan.pdf"');
+        res.send(Buffer.from(pdfBytes));
+
+    } catch (error) {
+        console.error('Error saat menggabungkan gambar ke PDF:', error);
+        res.status(500).json({ error: 'Gagal memproses file PDF di server.' });
+    } finally {
+        // Hapus file-file sementara yang diunggah multer
+        for (const path of tempFilePaths) {
+            await fs.unlink(path).catch(err => console.error(`Gagal menghapus file sementara: ${path}`, err));
+        }
+    }
+});
+
+
 app.post('/api/generate-qr', async (req, res) => {
     try {
         const { text, level = 'M', colorDark = '#000000', colorLight = '#ffffff' } = req.body;

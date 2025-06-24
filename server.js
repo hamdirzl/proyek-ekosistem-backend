@@ -9,6 +9,7 @@ const nodemailer = require('nodemailer');
 const { Pool } = require('pg');
 const multer = require('multer');
 const fs = require('fs').promises;
+const fsStream = require('fs');
 const path = require('path');
 const { convert } = require('libreoffice-convert');
 const { PDFDocument } = require('pdf-lib');
@@ -509,7 +510,7 @@ app.post('/api/convert', upload.single('file'), async (req, res) => {
             Object.entries(uploadTask.result.form.parameters).forEach(([key, value]) => {
                 uploadFormData.append(key, value);
             });
-            uploadFormData.append('file', fs.createReadStream(inputPath));
+            uploadFormData.append('file', fsStream.createReadStream(inputPath));
             
             await axios.post(uploadTask.result.form.url, uploadFormData, {
                 headers: uploadFormData.getHeaders()

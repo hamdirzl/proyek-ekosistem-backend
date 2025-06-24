@@ -720,6 +720,46 @@ app.post('/api/compress-image', upload.single('image'), async (req, res) => {
     }
 });
 
+app.post('/api/generate-pdf-from-canvas', async (req, res) => {
+    try {
+        const { imageDataUrl } = req.body;
+        if (!imageDataUrl) {
+            return res.status(400).json({ error: 'Data gambar tidak ditemukan.' });
+        }
+
+        // Buat dokumen PDF baru
+        const pdfDoc = await PDFDocument.create();
+        
+        // Embed gambar JPEG dari data URL
+        const jpgImage = await pdfDoc.embedJpg(imageDataUrl);
+        const jpgDims = jpgImage.scale(1);
+
+        // Tambahkan halaman seukuran gambar
+        const page = pdfDoc.addPage([jpgDims.width, jpgDims.height]);
+
+        // Gambar di halaman
+        page.drawImage(jpgImage, {
+            x: 0,
+            y: 0,
+            width: jpgDims.width,
+            height: jpgDims.height,
+        });
+
+        // Simpan PDF ke dalam buffer
+        const pdfBytes = await pdfDoc.save();
+
+        // Kirim file PDF sebagai respons untuk diunduh
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', 'attachment; filename="canvas-layout.pdf"');
+        res.send(Buffer.from(pdfBytes));
+
+    } catch (error) {
+        console.error('Error saat membuat PDF dari kanvas:', error);
+        res.status(500).json({ error: 'Gagal memproses PDF dari kanvas di server.' });
+    }
+});
+
+
 app.get('/api/portfolio', async (req, res) => {
     try {
         const result = await pool.query('SELECT id, title, description, image_url, project_link FROM portfolio_projects ORDER BY created_at DESC');

@@ -111,7 +111,9 @@ app.use(cors({
 }));
 
 
-app.use(express.json());
+app.use(express.json({ limit: '50mb' })); // Naikkan limit untuk menampung array gambar
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
 
 app.use('/public', express.static(path.join(__dirname, 'public')));
 
@@ -720,42 +722,39 @@ app.post('/api/compress-image', upload.single('image'), async (req, res) => {
     }
 });
 
+// [MODIFIKASI FINAL] Endpoint untuk menerima array gambar
 app.post('/api/generate-pdf-from-canvas', async (req, res) => {
     try {
-        const { imageDataUrl } = req.body;
-        if (!imageDataUrl) {
-            return res.status(400).json({ error: 'Data gambar tidak ditemukan.' });
+        const { imageDataUrls } = req.body;
+        if (!imageDataUrls || !Array.isArray(imageDataUrls) || imageDataUrls.length === 0) {
+            return res.status(400).json({ error: 'Data halaman (gambar) tidak ditemukan atau formatnya salah.' });
         }
 
-        // Buat dokumen PDF baru
         const pdfDoc = await PDFDocument.create();
-        
-        // Embed gambar JPEG dari data URL
-        const jpgImage = await pdfDoc.embedJpg(imageDataUrl);
-        const jpgDims = jpgImage.scale(1);
 
-        // Tambahkan halaman seukuran gambar
-        const page = pdfDoc.addPage([jpgDims.width, jpgDims.height]);
+        for (const dataUrl of imageDataUrls) {
+            const jpgImage = await pdfDoc.embedJpg(dataUrl);
+            const jpgDims = jpgImage.scale(1);
+            
+            const page = pdfDoc.addPage([jpgDims.width, jpgDims.height]);
+            
+            page.drawImage(jpgImage, {
+                x: 0,
+                y: 0,
+                width: jpgDims.width,
+                height: jpgDims.height,
+            });
+        }
 
-        // Gambar di halaman
-        page.drawImage(jpgImage, {
-            x: 0,
-            y: 0,
-            width: jpgDims.width,
-            height: jpgDims.height,
-        });
-
-        // Simpan PDF ke dalam buffer
         const pdfBytes = await pdfDoc.save();
 
-        // Kirim file PDF sebagai respons untuk diunduh
         res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', 'attachment; filename="canvas-layout.pdf"');
+        res.setHeader('Content-Disposition', 'attachment; filename="generated-multipage.pdf"');
         res.send(Buffer.from(pdfBytes));
 
     } catch (error) {
-        console.error('Error saat membuat PDF dari kanvas:', error);
-        res.status(500).json({ error: 'Gagal memproses PDF dari kanvas di server.' });
+        console.error('Error saat membuat PDF multi-halaman dari kanvas:', error);
+        res.status(500).json({ error: 'Gagal memproses PDF multi-halaman di server.' });
     }
 });
 

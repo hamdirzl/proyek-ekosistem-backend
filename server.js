@@ -294,22 +294,18 @@ app.post('/api/reset-password', async (req, res) => {
     }
 });
 
-// server.js
-app.post('/api/shorten', async (req, res) => { // Perhatikan, authenticateToken dihapus
+app.post('/api/shorten', async (req, res) => {
     try {
         const { original_url, custom_slug } = req.body;
         
-        // Secara cerdas memeriksa apakah ada pengguna yang login
         let userId = null;
         const authHeader = req.headers['authorization'];
         const token = authHeader && authHeader.split(' ')[1];
         if (token) {
             try {
-                // Jika ada token, kita coba verifikasi
                 const decoded = jwt.verify(token, process.env.JWT_SECRET);
-                userId = decoded.id; // Jika berhasil, kita dapatkan id pengguna
+                userId = decoded.id;
             } catch (e) {
-                // Jika token tidak valid (misal: kedaluwarsa), kita abaikan dan anggap sebagai tamu
                 console.log('Token tidak valid untuk /api/shorten, memproses sebagai tamu.');
             }
         }
@@ -337,7 +333,7 @@ app.post('/api/shorten', async (req, res) => { // Perhatikan, authenticateToken 
         
         const newLink = await pool.query(
             'INSERT INTO links (original_url, slug, user_id) VALUES ($1, $2, $3) RETURNING slug, original_url, created_at',
-            [original_url, slug, userId] // userId bisa jadi null jika tidak ada yang login
+            [original_url, slug, userId]
         );
 
         const baseUrl = process.env.BASE_URL || `https://link.hamdirzl.my.id`;
@@ -444,7 +440,6 @@ app.post('/api/user/change-password', authenticateToken, async (req, res) => {
     }
 });
 
-// server.js
 app.post('/api/convert', upload.single('file'), async (req, res) => {
     if (!req.file) {
         return res.status(400).json({ error: 'Tidak ada file yang diunggah.' });
@@ -486,7 +481,6 @@ app.post('/api/convert', upload.single('file'), async (req, res) => {
             Object.entries(importTask.result.form.parameters).forEach(([key, value]) => {
                 uploadFormData.append(key, value);
             });
-            // ===== PERUBAHAN DI SINI =====
             uploadFormData.append('file', fsStream.createReadStream(inputPath), { filename: req.file.originalname });
             
             await axios.post(importTask.result.form.url, uploadFormData, {
@@ -511,8 +505,7 @@ app.post('/api/convert', upload.single('file'), async (req, res) => {
                     'convert-the-file': {
                         operation: 'convert',
                         input: importTask.id,
-                        output_format: 'docx',
-                        engine: 'office'
+                        output_format: 'docx'
                     },
                     'export-the-file': {
                         operation: 'export/url',
@@ -580,39 +573,6 @@ app.post('/api/convert', upload.single('file'), async (req, res) => {
         res.status(500).json({ error: `Konversi dari ${inputFormat} ke ${outputFormat} tidak didukung.` });
     } finally {
         await fs.unlink(inputPath);
-    }
-});
-
-app.post('/api/convert/images-to-pdf', upload.array('files', 15), async (req, res) => {
-    if (!req.files || req.files.length === 0) {
-        return res.status(400).json({ error: 'Tidak ada file gambar yang diunggah.' });
-    }
-    const filePaths = req.files.map(file => file.path);
-    try {
-        const pdfDoc = await PDFDocument.create();
-        for (const file of req.files) {
-            if (file.mimetype !== 'image/jpeg' && file.mimetype !== 'image/png') continue;
-            const imgBuffer = await fs.readFile(file.path);
-            let image;
-            if (file.mimetype === 'image/jpeg') {
-                image = await pdfDoc.embedJpg(imgBuffer);
-            } else {
-                image = await pdfDoc.embedPng(imgBuffer);
-            }
-            const page = pdfDoc.addPage([image.width, image.height]);
-            page.drawImage(image, { x: 0, y: 0, width: page.getWidth(), height: page.getHeight() });
-        }
-        const pdfBytes = await pdfDoc.save();
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', 'attachment; filename="hasil-gabungan.pdf"');
-        res.send(Buffer.from(pdfBytes));
-    } catch (error) {
-        console.error('Error saat menggabungkan gambar ke PDF:', error);
-        res.status(500).json({ error: 'Gagal membuat file PDF.' });
-    } finally {
-        for (const filePath of filePaths) {
-            await fs.unlink(filePath).catch(err => console.error("Gagal menghapus file sementara:", err));
-        }
     }
 });
 
@@ -1301,6 +1261,7 @@ wss.on('connection', (ws, req) => {
                     'INSERT INTO chat_messages (conversation_id, sender_id, sender_type, content, message_type) VALUES ($1, $2, $3, $4, $5)',
                     [ws.userId, ws.userId, 'user', content, messageType]
                 ).catch(err => console.error("Gagal simpan pesan user ke DB:", err));
+
                 break;
 
             case 'typing':

@@ -292,10 +292,25 @@ app.post('/api/reset-password', async (req, res) => {
     }
 });
 
-app.post('/api/shorten', authenticateToken, async (req, res) => {
+// server.js
+app.post('/api/shorten', async (req, res) => { // Perhatikan, authenticateToken dihapus
     try {
         const { original_url, custom_slug } = req.body;
-        const userId = req.user.id; 
+        
+        // Secara cerdas memeriksa apakah ada pengguna yang login
+        let userId = null;
+        const authHeader = req.headers['authorization'];
+        const token = authHeader && authHeader.split(' ')[1];
+        if (token) {
+            try {
+                // Jika ada token, kita coba verifikasi
+                const decoded = jwt.verify(token, process.env.JWT_SECRET);
+                userId = decoded.id; // Jika berhasil, kita dapatkan id pengguna
+            } catch (e) {
+                // Jika token tidak valid (misal: kedaluwarsa), kita abaikan dan anggap sebagai tamu
+                console.log('Token tidak valid untuk /api/shorten, memproses sebagai tamu.');
+            }
+        }
 
         if (!original_url || !(original_url.startsWith('http://') || original_url.startsWith('https://'))) {
             return res.status(400).json({ error: 'URL tidak valid. Harus diawali dengan http:// atau https://' });
@@ -320,7 +335,7 @@ app.post('/api/shorten', authenticateToken, async (req, res) => {
         
         const newLink = await pool.query(
             'INSERT INTO links (original_url, slug, user_id) VALUES ($1, $2, $3) RETURNING slug, original_url, created_at',
-            [original_url, slug, userId]
+            [original_url, slug, userId] // userId bisa jadi null jika tidak ada yang login
         );
 
         const baseUrl = process.env.BASE_URL || `https://link.hamdirzl.my.id`;
@@ -427,7 +442,7 @@ app.post('/api/user/change-password', authenticateToken, async (req, res) => {
     }
 });
 
-app.post('/api/convert', authenticateToken, upload.single('file'), async (req, res) => {
+app.post('/api/convert', upload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'Tidak ada file yang diunggah.' });
     const { outputFormat } = req.body;
     if (!outputFormat) {
@@ -457,7 +472,7 @@ app.post('/api/convert', authenticateToken, upload.single('file'), async (req, r
     }
 });
 
-app.post('/api/convert/images-to-pdf', authenticateToken, upload.array('files', 15), async (req, res) => {
+app.post('/api/convert/images-to-pdf', upload.array('files', 15), async (req, res) => {
     if (!req.files || req.files.length === 0) {
         return res.status(400).json({ error: 'Tidak ada file gambar yang diunggah.' });
     }
@@ -490,7 +505,7 @@ app.post('/api/convert/images-to-pdf', authenticateToken, upload.array('files', 
     }
 });
 
-app.post('/api/generate-qr', authenticateToken, async (req, res) => {
+app.post('/api/generate-qr', async (req, res) => {
     try {
         const { text, level = 'M', colorDark = '#000000', colorLight = '#ffffff' } = req.body;
 
@@ -518,7 +533,7 @@ app.post('/api/generate-qr', authenticateToken, async (req, res) => {
     }
 });
 
-app.post('/api/compress-image', authenticateToken, upload.single('image'), async (req, res) => {
+app.post('/api/compress-image', upload.single('image'), async (req, res) => {
     if (!req.file) {
         return res.status(400).json({ error: 'Tidak ada file gambar yang diunggah.' });
     }

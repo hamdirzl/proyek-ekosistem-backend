@@ -20,6 +20,7 @@ const http = require('http');
 const WebSocket = require('ws');
 const axios = require('axios');
 const { OAuth2Client } = require('google-auth-library');
+const FormData = require('form-data');
 
 // Inisialisasi Supabase Client
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
@@ -442,33 +443,113 @@ app.post('/api/user/change-password', authenticateToken, async (req, res) => {
     }
 });
 
+// server.js
 app.post('/api/convert', upload.single('file'), async (req, res) => {
-    if (!req.file) return res.status(400).json({ error: 'Tidak ada file yang diunggah.' });
-    const { outputFormat } = req.body;
-    if (!outputFormat) {
-        await fs.unlink(req.file.path);
-        return res.status(400).json({ error: 'Format output tidak dipilih.' });
+    if (!req.file) {
+        return res.status(400).json({ error: 'Tidak ada file yang diunggah.' });
     }
+
+    const { outputFormat } = req.body;
     const inputPath = req.file.path;
-    const outputPath = path.join(__dirname, 'uploads', `${Date.now()}.${outputFormat}`);
-    try {
-        const fileBuffer = await fs.readFile(inputPath);
-        let outputBuffer = await new Promise((resolve, reject) => {
-            convert(fileBuffer, `.${outputFormat}`, undefined, (err, result) => {
-                if (err) return reject(err);
-                resolve(result);
+    const inputFormat = path.extname(req.file.originalname).slice(1).toLowerCase();
+
+    // ==========================================================
+    // === LOGIKA BARU: Menggunakan CloudConvert untuk PDF->DOCX ===
+    // ==========================================================
+    if (inputFormat === 'pdf' && outputFormat === 'docx') {
+        console.log('Mendeteksi konversi PDF -> DOCX, menggunakan CloudConvert API...');
+        try {
+            // Langkah 1: Buat job untuk mengimpor file
+            const importResponse = await axios.post('https://api.cloudconvert.com/v2/import/upload', {}, {
+                headers: { 'Authorization': `Bearer ${process.env.CLOUDCONVERT_API_KEY}` }
             });
-        });
-        await fs.writeFile(outputPath, outputBuffer);
-        res.download(outputPath, `converted-file.${outputFormat}`, async (err) => {
-            if (err) console.error("Error saat mengirim file:", err);
-            await fs.unlink(inputPath);
-            await fs.unlink(outputPath);
-        });
-    } catch (error) {
-        console.error('Error saat konversi file:', error);
-        await fs.unlink(inputPath).catch(err => console.error("Gagal hapus input file saat error:", err));
-        res.status(500).json({ error: 'Gagal mengonversi file.' });
+            const importTask = importResponse.data.data;
+
+            // Langkah 2: Upload file ke URL yang diberikan CloudConvert
+            const uploadFormData = new FormData();
+            Object.entries(importTask.result.form.parameters).forEach(([key, value]) => {
+                uploadFormData.append(key, value);
+            });
+            uploadFormData.append('file', fs.createReadStream(inputPath));
+            
+            await axios.post(importTask.result.form.url, uploadFormData, {
+                headers: uploadFormData.getHeaders()
+            });
+
+            // Langkah 3: Buat job konversi yang menggunakan file yang sudah di-upload
+            const jobResponse = await axios.post('https://api.cloudconvert.com/v2/jobs', {
+                tasks: {
+                    'import-1': {
+                        operation: 'import/upload',
+                        id: importTask.id
+                    },
+                    'convert-1': {
+                        operation: 'convert',
+                        input: 'import-1',
+                        output_format: 'docx',
+                        engine: 'office'
+                    },
+                    'export-1': {
+                        operation: 'export/url',
+                        input: 'convert-1'
+                    }
+                }
+            }, {
+                headers: { 'Authorization': `Bearer ${process.env.CLOUDCONVERT_API_KEY}` }
+            });
+
+            // Langkah 4: Tunggu hingga job selesai
+            let job = jobResponse.data.data;
+            while (job.status !== 'finished') {
+                await new Promise(resolve => setTimeout(resolve, 2000)); // Tunggu 2 detik
+                const jobStatusResponse = await axios.get(`https://api.cloudconvert.com/v2/jobs/${job.id}`, {
+                    headers: { 'Authorization': `Bearer ${process.env.CLOUDCONVERT_API_KEY}` }
+                });
+                job = jobStatusResponse.data.data;
+            }
+
+            // Langkah 5: Dapatkan URL download dan kirim filenya ke pengguna
+            const exportTask = job.tasks.find(task => task.name === 'export-1');
+            const downloadUrl = exportTask.result.files[0].url;
+            
+            const convertedFileResponse = await axios.get(downloadUrl, { responseType: 'arraybuffer' });
+            
+            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+            res.setHeader('Content-Disposition', `attachment; filename="converted_${Date.now()}.docx"`);
+            res.send(Buffer.from(convertedFileResponse.data));
+
+        } catch (error) {
+            console.error('Error dengan CloudConvert API:', error.response ? error.response.data : error.message);
+            res.status(500).json({ error: 'Gagal mengonversi file menggunakan layanan cloud.' });
+        } finally {
+             await fs.unlink(inputPath); // Selalu hapus file sementara
+        }
+
+    } else {
+        // ============================================================
+        // === LOGIKA LAMA: Fallback ke LibreOffice untuk konversi lain ===
+        // ============================================================
+        console.log(`Menggunakan konverter LibreOffice untuk ${inputFormat} -> ${outputFormat}...`);
+        const outputPath = path.join(__dirname, 'uploads', `${Date.now()}.${outputFormat}`);
+        try {
+            const fileBuffer = await fs.readFile(inputPath);
+            let outputBuffer = await new Promise((resolve, reject) => {
+                convert(fileBuffer, `.${outputFormat}`, undefined, (err, result) => {
+                    if (err) return reject(err);
+                    resolve(result);
+                });
+            });
+            await fs.writeFile(outputPath, outputBuffer);
+            res.download(outputPath, `converted-file.${outputFormat}`, async (err) => {
+                if (err) console.error("Error saat mengirim file:", err);
+                await fs.unlink(inputPath);
+                await fs.unlink(outputPath);
+            });
+        } catch (error) {
+            console.error('Error saat konversi file:', error);
+            await fs.unlink(inputPath).catch(err => console.error("Gagal hapus input file saat error:", err));
+            res.status(500).json({ error: `Konversi dari ${inputFormat} ke ${outputFormat} tidak didukung.` });
+        }
     }
 });
 

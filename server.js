@@ -454,10 +454,6 @@ app.post('/api/convert', upload.single('file'), async (req, res) => {
     const inputPath = req.file.path;
     const inputFormat = path.extname(req.file.originalname).slice(1).toLowerCase();
 
-    // ==========================================================
-    // === LOGIKA BARU DAN BENAR UNTUK SEMUA JENIS KONVERSI    ===
-    // ==========================================================
-
     // Prioritas 1: Konversi Gambar ke Gambar menggunakan Sharp (efisien)
     const imageFormats = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'tiff'];
     if (imageFormats.includes(inputFormat) && imageFormats.includes(outputFormat)) {
@@ -473,23 +469,51 @@ app.post('/api/convert', upload.single('file'), async (req, res) => {
         } finally {
             await fs.unlink(inputPath);
         }
-        return; // Hentikan eksekusi di sini setelah selesai
+        return;
     }
 
-    // Prioritas 2: Konversi PDF ke DOCX menggunakan CloudConvert
+    // Prioritas 2: Konversi PDF ke DOCX menggunakan CloudConvert (ALUR KERJA BARU - LEBIH TAHAN BANTING)
     if (inputFormat === 'pdf' && outputFormat === 'docx') {
         console.log('Mendeteksi konversi PDF -> DOCX, menggunakan CloudConvert API...');
+        let importTask = null;
         try {
-            // Alur Kerja Baru yang Lebih Sederhana
-            // Langkah 1: Buat satu 'job' yang berisi semua instruksi
+            // Langkah 1: Buat tugas import saja
+            const importResponse = await axios.post('https://api.cloudconvert.com/v2/import/upload', {}, {
+                headers: { 'Authorization': `Bearer ${process.env.CLOUDCONVERT_API_KEY}` }
+            });
+            importTask = importResponse.data.data;
+
+            // Langkah 2: Upload file ke URL yang diberikan CloudConvert
+            const uploadFormData = new FormData();
+            Object.entries(importTask.result.form.parameters).forEach(([key, value]) => {
+                uploadFormData.append(key, value);
+            });
+            uploadFormData.append('file', fsStream.createReadStream(inputPath));
+            
+            await axios.post(importTask.result.form.url, uploadFormData, {
+                headers: uploadFormData.getHeaders()
+            });
+
+            // Langkah 3: Tunggu HANYA tugas import selesai
+            let updatedImportTask = importTask;
+            while (updatedImportTask.status !== 'finished' && updatedImportTask.status !== 'error') {
+                 await new Promise(resolve => setTimeout(resolve, 1000));
+                 const taskStatusResponse = await axios.get(`https://api.cloudconvert.com/v2/tasks/${importTask.id}`, {
+                     headers: { 'Authorization': `Bearer ${process.env.CLOUDCONVERT_API_KEY}` }
+                 });
+                 updatedImportTask = taskStatusResponse.data.data;
+            }
+
+            if (updatedImportTask.status === 'error') {
+                throw new Error(updatedImportTask.message || 'Gagal mengunggah file ke CloudConvert.');
+            }
+             
+            // Langkah 4: Buat job konversi BARU setelah import sukses
             const jobResponse = await axios.post('https://api.cloudconvert.com/v2/jobs', {
                 tasks: {
-                    'upload-my-file': {
-                        operation: 'import/upload'
-                    },
                     'convert-the-file': {
                         operation: 'convert',
-                        input: 'upload-my-file',
+                        input: importTask.id, // Gunakan ID dari task import yang sudah selesai
                         output_format: 'docx',
                         engine: 'office'
                     },
@@ -502,36 +526,22 @@ app.post('/api/convert', upload.single('file'), async (req, res) => {
                 headers: { 'Authorization': `Bearer ${process.env.CLOUDCONVERT_API_KEY}` }
             });
 
-            const job = jobResponse.data.data;
-            const uploadTask = job.tasks.find(task => task.name === 'upload-my-file');
-
-            // Langkah 2: Upload file ke URL yang diberikan oleh job
-            const uploadFormData = new FormData();
-            Object.entries(uploadTask.result.form.parameters).forEach(([key, value]) => {
-                uploadFormData.append(key, value);
-            });
-            uploadFormData.append('file', fsStream.createReadStream(inputPath));
-            
-            await axios.post(uploadTask.result.form.url, uploadFormData, {
-                headers: uploadFormData.getHeaders()
-            });
-
-            // Langkah 3: Tunggu hingga job selesai
-            let updatedJob = job;
-            while (updatedJob.status !== 'finished' && updatedJob.status !== 'error') {
+            // Langkah 5: Tunggu job konversi selesai
+            let conversionJob = jobResponse.data.data;
+            while (conversionJob.status !== 'finished' && conversionJob.status !== 'error') {
                 await new Promise(resolve => setTimeout(resolve, 2000));
-                const jobStatusResponse = await axios.get(`https://api.cloudconvert.com/v2/jobs/${job.id}`, {
+                const jobStatusResponse = await axios.get(`https://api.cloudconvert.com/v2/jobs/${conversionJob.id}`, {
                     headers: { 'Authorization': `Bearer ${process.env.CLOUDCONVERT_API_KEY}` }
                 });
-                updatedJob = jobStatusResponse.data.data;
+                conversionJob = jobStatusResponse.data.data;
             }
 
-            if (updatedJob.status === 'error') {
-                throw new Error(updatedJob.tasks.find(t => t.status === 'error')?.message || 'Job konversi gagal di CloudConvert.');
+            if (conversionJob.status === 'error') {
+                throw new Error(conversionJob.tasks.find(t => t.status === 'error')?.message || 'Job konversi gagal.');
             }
 
-            // Langkah 4: Dapatkan URL download dan kirim filenya
-            const exportTask = updatedJob.tasks.find(task => task.name === 'export-the-file');
+            // Langkah 6: Dapatkan URL download dan kirim filenya
+            const exportTask = conversionJob.tasks.find(task => task.name === 'export-the-file');
             const downloadUrl = exportTask.result.files[0].url;
             
             const convertedFileResponse = await axios.get(downloadUrl, { responseType: 'arraybuffer' });
@@ -546,7 +556,7 @@ app.post('/api/convert', upload.single('file'), async (req, res) => {
         } finally {
              await fs.unlink(inputPath);
         }
-        return; // Hentikan eksekusi
+        return;
     }
 
     // Prioritas 3 (Fallback): Gunakan LibreOffice untuk sisanya

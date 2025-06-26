@@ -12,7 +12,6 @@ const fs = require('fs').promises;
 const fsStream = require('fs');
 const path = require('path');
 const { convert } = require('libreoffice-convert');
-const { PDFDocument } = require('pdf-lib');
 const QRCode = require('qrcode');
 const sharp = require('sharp');
 const { createClient } = require('@supabase/supabase-js');
@@ -578,66 +577,6 @@ app.post('/api/convert', upload.single('file'), async (req, res) => {
     }
 });
 
-app.post('/api/convert/images-to-pdf', upload.array('files'), async (req, res) => {
-    // upload.array('files') akan menangani upload beberapa file dengan nama field 'files'
-    if (!req.files || req.files.length === 0) {
-        return res.status(400).json({ error: 'Tidak ada file gambar yang diunggah.' });
-    }
-
-    const tempFilePaths = req.files.map(file => file.path);
-
-    try {
-        // Buat dokumen PDF baru
-        const pdfDoc = await PDFDocument.create();
-
-        for (const file of req.files) {
-            const filePath = file.path;
-            const imageBytes = await fs.readFile(filePath);
-            
-            let image;
-            // Cek tipe file untuk memilih metode embed yang tepat
-            if (file.mimetype === 'image/jpeg' || file.mimetype === 'image/jpg') {
-                image = await pdfDoc.embedJpg(imageBytes);
-            } else if (file.mimetype === 'image/png') {
-                image = await pdfDoc.embedPng(imageBytes);
-            } else {
-                // Lewati file yang tidak didukung
-                console.warn(`Melewati format file yang tidak didukung: ${file.mimetype}`);
-                continue;
-            }
-
-            // Tambahkan halaman baru seukuran gambar
-            const page = pdfDoc.addPage([image.width, image.height]);
-
-            // Gambar gambar tersebut di halaman baru
-            page.drawImage(image, {
-                x: 0,
-                y: 0,
-                width: image.width,
-                height: image.height,
-            });
-        }
-
-        // Simpan PDF ke dalam buffer
-        const pdfBytes = await pdfDoc.save();
-
-        // Kirim file PDF sebagai respons
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', 'attachment; filename="hasil-gabungan.pdf"');
-        res.send(Buffer.from(pdfBytes));
-
-    } catch (error) {
-        console.error('Error saat menggabungkan gambar ke PDF:', error);
-        res.status(500).json({ error: 'Gagal memproses file PDF di server.' });
-    } finally {
-        // Hapus file-file sementara yang diunggah multer
-        for (const path of tempFilePaths) {
-            await fs.unlink(path).catch(err => console.error(`Gagal menghapus file sementara: ${path}`, err));
-        }
-    }
-});
-
-
 app.post('/api/generate-qr', async (req, res) => {
     try {
         const { text, level = 'M', colorDark = '#000000', colorLight = '#ffffff' } = req.body;
@@ -721,43 +660,6 @@ app.post('/api/compress-image', upload.single('image'), async (req, res) => {
         await fs.unlink(inputPath).catch(err => console.error("Gagal menghapus file input sementara:", err));
     }
 });
-
-// [MODIFIKASI FINAL] Endpoint untuk menerima array gambar
-app.post('/api/generate-pdf-from-canvas', async (req, res) => {
-    try {
-        const { imageDataUrls } = req.body;
-        if (!imageDataUrls || !Array.isArray(imageDataUrls) || imageDataUrls.length === 0) {
-            return res.status(400).json({ error: 'Data halaman (gambar) tidak ditemukan atau formatnya salah.' });
-        }
-
-        const pdfDoc = await PDFDocument.create();
-
-        for (const dataUrl of imageDataUrls) {
-            const jpgImage = await pdfDoc.embedJpg(dataUrl);
-            const jpgDims = jpgImage.scale(1);
-            
-            const page = pdfDoc.addPage([jpgDims.width, jpgDims.height]);
-            
-            page.drawImage(jpgImage, {
-                x: 0,
-                y: 0,
-                width: jpgDims.width,
-                height: jpgDims.height,
-            });
-        }
-
-        const pdfBytes = await pdfDoc.save();
-
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', 'attachment; filename="generated-multipage.pdf"');
-        res.send(Buffer.from(pdfBytes));
-
-    } catch (error) {
-        console.error('Error saat membuat PDF multi-halaman dari kanvas:', error);
-        res.status(500).json({ error: 'Gagal memproses PDF multi-halaman di server.' });
-    }
-});
-
 
 app.get('/api/portfolio', async (req, res) => {
     try {

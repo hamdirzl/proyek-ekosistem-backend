@@ -21,6 +21,7 @@ const WebSocket = require('ws');
 const axios = require('axios');
 const { OAuth2Client } = require('google-auth-library');
 const FormData = require('form-data');
+const PDFDocument = require('pdfkit');
 
 // Inisialisasi Supabase Client
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
@@ -658,6 +659,91 @@ app.post('/api/compress-image', upload.single('image'), async (req, res) => {
         res.status(500).json({ error: 'Gagal mengompres gambar di server.' });
     } finally {
         await fs.unlink(inputPath).catch(err => console.error("Gagal menghapus file input sementara:", err));
+    }
+});
+
+// [BARU] ENDPOINT UNTUK KONVERSI GAMBAR KE PDF
+app.post('/api/images-to-pdf', upload.array('images'), async (req, res) => {
+    if (!req.files || req.files.length === 0) {
+        return res.status(400).json({ error: 'Tidak ada gambar yang diunggah.' });
+    }
+
+    try {
+        const {
+            pageSize = 'A4',
+            orientation = 'portrait',
+            marginChoice = 'no_margin'
+        } = req.body;
+
+        // Tentukan margin berdasarkan pilihan
+        let marginSize = 0;
+        if (marginChoice === 'small') {
+            marginSize = 36; // 0.5 inch
+        } else if (marginChoice === 'big') {
+            marginSize = 72; // 1 inch
+        }
+
+        // Atur opsi dokumen PDF
+        const doc = new PDFDocument({
+            size: pageSize,
+            layout: orientation,
+            autoFirstPage: false, // Kita akan menambah halaman secara manual
+            margins: {
+                top: marginSize,
+                bottom: marginSize,
+                left: marginSize,
+                right: marginSize
+            }
+        });
+
+        // Atur header respons agar browser mengunduh file
+        const outputFileName = `hamdirzl-images-to-pdf-${Date.now()}.pdf`;
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${outputFileName}"`);
+
+        // Alirkan output PDF langsung ke respons
+        doc.pipe(res);
+
+        // Loop melalui setiap file gambar yang diunggah
+        for (const file of req.files) {
+            try {
+                const image = doc.openImage(file.path);
+
+                // Tambah halaman baru untuk setiap gambar
+                doc.addPage();
+                
+                // Hitung area yang tersedia di halaman (ukuran halaman dikurangi margin)
+                const availableWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+                const availableHeight = doc.page.height - doc.page.margins.top - doc.page.margins.bottom;
+
+                // Skalakan gambar agar pas di dalam area yang tersedia sambil menjaga rasio aspek
+                doc.image(image, doc.page.margins.left, doc.page.margins.top, {
+                    fit: [availableWidth, availableHeight],
+                    align: 'center',
+                    valign: 'center'
+                });
+            } catch (imgError) {
+                console.warn(`Melewatkan file yang tidak didukung atau rusak: ${file.originalname}`, imgError);
+                // Tambahkan halaman dengan pesan error jika gambar tidak bisa diproses
+                doc.addPage()
+                   .fillColor('red')
+                   .text(`Error: Gagal memproses gambar "${file.originalname}". File mungkin rusak atau format tidak didukung.`, doc.page.margins.left, doc.page.margins.top);
+            } finally {
+                // Hapus file sementara setelah diproses
+                await fs.unlink(file.path);
+            }
+        }
+
+        // Finalisasi dokumen PDF
+        doc.end();
+
+    } catch (error) {
+        console.error('Error saat membuat PDF:', error);
+        res.status(500).json({ error: 'Gagal membuat file PDF di server.' });
+        // Pastikan semua file sementara dihapus jika terjadi error
+        for (const file of req.files) {
+            await fs.unlink(file.path).catch(e => console.error("Gagal hapus file temp saat error:", e));
+        }
     }
 });
 

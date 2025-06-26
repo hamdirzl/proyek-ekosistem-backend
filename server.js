@@ -3,7 +3,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
-const jwt =require('jsonwebtoken');
+const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const { Pool } = require('pg');
@@ -21,6 +21,7 @@ const WebSocket = require('ws');
 const axios = require('axios');
 const { OAuth2Client } = require('google-auth-library');
 const FormData = require('form-data');
+const { PDFDocument } = require('pdf-lib'); // <-- DEPENDENSI BARU
 
 // Inisialisasi Supabase Client
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
@@ -660,6 +661,69 @@ app.post('/api/compress-image', upload.single('image'), async (req, res) => {
         await fs.unlink(inputPath).catch(err => console.error("Gagal menghapus file input sementara:", err));
     }
 });
+
+// ENDPOINT BARU UNTUK IMAGE TO PDF
+app.post('/api/images-to-pdf', upload.array('images'), async (req, res) => {
+    const uploadedFiles = req.files;
+    try {
+        if (!uploadedFiles || uploadedFiles.length === 0) {
+            return res.status(400).json({ error: 'Tidak ada gambar yang diunggah.' });
+        }
+
+        const config = JSON.parse(req.body.config);
+        const pdfDoc = await PDFDocument.create();
+
+        for (const itemConfig of config) {
+            const file = uploadedFiles.find(f => f.originalname === itemConfig.name);
+            if (!file) continue;
+
+            let imageBuffer = await fs.readFile(file.path);
+
+            if (itemConfig.crop) {
+                imageBuffer = await sharp(imageBuffer)
+                    .extract({
+                        left: Math.round(itemConfig.crop.x),
+                        top: Math.round(itemConfig.crop.y),
+                        width: Math.round(itemConfig.crop.width),
+                        height: Math.round(itemConfig.crop.height)
+                    })
+                    .toBuffer();
+            }
+
+            let image;
+            if (file.mimetype === 'image/png') {
+                image = await pdfDoc.embedPng(imageBuffer);
+            } else {
+                image = await pdfDoc.embedJpg(imageBuffer);
+            }
+            
+            const page = pdfDoc.addPage([image.width, image.height]);
+            page.drawImage(image, {
+                x: 0,
+                y: 0,
+                width: image.width,
+                height: image.height,
+            });
+        }
+
+        const pdfBytes = await pdfDoc.save();
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="hamdi-images-to-pdf-${Date.now()}.pdf"`);
+        res.send(Buffer.from(pdfBytes));
+
+    } catch (error) {
+        console.error('Error creating PDF from images:', error);
+        res.status(500).json({ error: 'Gagal membuat file PDF.' });
+    } finally {
+        // Selalu hapus file sementara setelah selesai
+        if (uploadedFiles) {
+            for (const file of uploadedFiles) {
+                await fs.unlink(file.path).catch(e => console.error(`Gagal menghapus file sementara: ${file.path}`, e));
+            }
+        }
+    }
+});
+
 
 app.get('/api/portfolio', async (req, res) => {
     try {

@@ -670,45 +670,56 @@ app.post('/api/images-to-pdf', upload.array('images'), async (req, res) => {
             return res.status(400).json({ error: 'Tidak ada gambar yang diunggah.' });
         }
 
-        const config = JSON.parse(req.body.config);
+        // Menerima 'blueprint' dokumen dari frontend
+        const documentConfig = JSON.parse(req.body.documentConfig);
         const pdfDoc = await PDFDocument.create();
 
-        for (const itemConfig of config) {
-            const file = uploadedFiles.find(f => f.originalname === itemConfig.name);
-            if (!file) continue;
+        // Loop untuk setiap halaman dalam konfigurasi
+        for (const pageConfig of documentConfig.pages) {
+            // Tambahkan halaman baru (misalnya, ukuran A4 potrait: 595x842 points)
+            const page = pdfDoc.addPage([pageConfig.width, pageConfig.height]);
 
-            let imageBuffer = await fs.readFile(file.path);
+            // Loop untuk setiap gambar di halaman tersebut
+            for (const imageConfig of pageConfig.images) {
+                const file = uploadedFiles.find(f => f.originalname === imageConfig.fileName);
+                if (!file) continue;
 
-            if (itemConfig.crop) {
-                imageBuffer = await sharp(imageBuffer)
-                    .extract({
-                        left: Math.round(itemConfig.crop.x),
-                        top: Math.round(itemConfig.crop.y),
-                        width: Math.round(itemConfig.crop.width),
-                        height: Math.round(itemConfig.crop.height)
-                    })
-                    .toBuffer();
+                let imageBuffer = await fs.promises.readFile(file.path);
+
+                // 1. Terapkan CROP terlebih dahulu jika ada
+                if (imageConfig.crop) {
+                    imageBuffer = await sharp(imageBuffer)
+                        .extract({
+                            left: Math.round(imageConfig.crop.x),
+                            top: Math.round(imageConfig.crop.y),
+                            width: Math.round(imageConfig.crop.width),
+                            height: Math.round(imageConfig.crop.height)
+                        })
+                        .toBuffer();
+                }
+
+                // 2. Embed gambar yang sudah (atau tidak) di-crop ke PDF
+                let pdfImage;
+                if (file.mimetype === 'image/png') {
+                    pdfImage = await pdfDoc.embedPng(imageBuffer);
+                } else {
+                    pdfImage = await pdfDoc.embedJpg(imageBuffer);
+                }
+
+                // 3. Gambar ke halaman dengan posisi dan ukuran yang ditentukan
+                page.drawImage(pdfImage, {
+                    x: imageConfig.x,
+                    y: page.getHeight() - imageConfig.y - imageConfig.height, // Koordinat Y di PDF dihitung dari bawah
+                    width: imageConfig.width,
+                    height: imageConfig.height,
+                });
             }
-
-            let image;
-            if (file.mimetype === 'image/png') {
-                image = await pdfDoc.embedPng(imageBuffer);
-            } else {
-                image = await pdfDoc.embedJpg(imageBuffer);
-            }
-            
-            const page = pdfDoc.addPage([image.width, image.height]);
-            page.drawImage(image, {
-                x: 0,
-                y: 0,
-                width: image.width,
-                height: image.height,
-            });
         }
 
         const pdfBytes = await pdfDoc.save();
+
         res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="hamdi-images-to-pdf-${Date.now()}.pdf"`);
+        res.setHeader('Content-Disposition', `attachment; filename="dokumen-hamdi-${Date.now()}.pdf"`);
         res.send(Buffer.from(pdfBytes));
 
     } catch (error) {
@@ -718,37 +729,9 @@ app.post('/api/images-to-pdf', upload.array('images'), async (req, res) => {
         // Selalu hapus file sementara setelah selesai
         if (uploadedFiles) {
             for (const file of uploadedFiles) {
-                await fs.unlink(file.path).catch(e => console.error(`Gagal menghapus file sementara: ${file.path}`, e));
+                await fs.promises.unlink(file.path).catch(e => console.error(`Gagal menghapus file sementara: ${file.path}`, e));
             }
         }
-    }
-});
-
-
-app.get('/api/portfolio', async (req, res) => {
-    try {
-        const result = await pool.query('SELECT id, title, description, image_url, project_link FROM portfolio_projects ORDER BY created_at DESC');
-        res.json(result.rows);
-    } catch (error) {
-        console.error('Error fetching portfolio projects:', error);
-        res.status(500).json({ error: 'Gagal mengambil data portofolio.' });
-    }
-});
-
-app.get('/api/portfolio/:id', async (req, res) => {
-    try {
-        const { id } = req.params;
-        const result = await pool.query('SELECT * FROM portfolio_projects WHERE id = $1', [id]);
-
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: 'Proyek tidak ditemukan.' });
-        }
-
-        res.json(result.rows[0]);
-
-    } catch (error) {
-        console.error(`Error fetching portfolio project with id ${req.params.id}:`, error);
-        res.status(500).json({ error: 'Gagal mengambil data proyek.' });
     }
 });
 

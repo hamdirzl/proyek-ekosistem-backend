@@ -22,9 +22,6 @@ const axios = require('axios');
 const { OAuth2Client } = require('google-auth-library');
 const FormData = require('form-data');
 const PDFDocumentKit = require('pdfkit'); // Nama diubah agar tidak konflik
-const { PDFDocument } = require('pdf-lib');
-const archiver = require('archiver');
-
 
 // Inisialisasi Supabase Client
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
@@ -749,68 +746,6 @@ app.post('/api/images-to-pdf', upload.array('images'), async (req, res) => {
         }
     }
 });
-
-// [BARU] ENDPOINT UNTUK FITUR SPLIT PDF
-app.post('/api/split-pdf', upload.single('file'), async (req, res) => {
-    if (!req.file) {
-        return res.status(400).json({ error: 'Tidak ada file PDF yang diunggah.' });
-    }
-
-    try {
-        const ranges = JSON.parse(req.body.ranges);
-        const merge = req.body.merge === 'true';
-        const originalPdfBytes = await fs.readFile(req.file.path);
-        const pdfDoc = await PDFDocument.load(originalPdfBytes);
-        const totalPages = pdfDoc.getPageCount();
-
-        if (merge) {
-            // === LOGIKA UNTUK MENGGABUNGKAN SEMUA RANGE MENJADI SATU FILE ===
-            const newPdfDoc = await PDFDocument.create();
-            for (const range of ranges) {
-                const start = Math.max(0, parseInt(range.from, 10) - 1);
-                const end = Math.min(totalPages, parseInt(range.to, 10));
-                for (let i = start; i < end; i++) {
-                    const [copiedPage] = await newPdfDoc.copyPages(pdfDoc, [i]);
-                    newPdfDoc.addPage(copiedPage);
-                }
-            }
-            const pdfBytes = await newPdfDoc.save();
-            res.setHeader('Content-Type', 'application/pdf');
-            res.setHeader('Content-Disposition', `attachment; filename="split-merged.pdf"`);
-            res.send(Buffer.from(pdfBytes));
-
-        } else {
-            // === LOGIKA UNTUK MEMBUAT FILE TERPISAH PER RANGE (DALAM ZIP) ===
-            const archive = archiver('zip', { zlib: { level: 9 } });
-            res.setHeader('Content-Type', 'application/zip');
-            res.setHeader('Content-Disposition', `attachment; filename="split-files.zip"`);
-            archive.pipe(res);
-
-            for (let i = 0; i < ranges.length; i++) {
-                const range = ranges[i];
-                const newPdfDoc = await PDFDocument.create();
-                const start = Math.max(0, parseInt(range.from, 10) - 1);
-                const end = Math.min(totalPages, parseInt(range.to, 10));
-
-                for (let j = start; j < end; j++) {
-                    const [copiedPage] = await newPdfDoc.copyPages(pdfDoc, [j]);
-                    newPdfDoc.addPage(copiedPage);
-                }
-
-                const pdfBytes = await newPdfDoc.save();
-                archive.append(Buffer.from(pdfBytes), { name: `range_${range.from}-${range.to}.pdf` });
-            }
-            await archive.finalize();
-        }
-
-    } catch (error) {
-        console.error('Error splitting PDF:', error);
-        res.status(500).json({ error: 'Gagal memisahkan file PDF di server.' });
-    } finally {
-        await fs.unlink(req.file.path); // Selalu hapus file sementara
-    }
-});
-
 
 app.get('/api/portfolio', async (req, res) => {
     try {

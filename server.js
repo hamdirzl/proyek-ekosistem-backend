@@ -1551,6 +1551,6 @@ app.get('/api/auth/google/callback', async (req, res) => {
 });
 
 // Panggilan server.listen HANYA SATU KALI di akhir file
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
     console.log(`Server HTTP & WebSocket berjalan di port ${PORT}`);
 });

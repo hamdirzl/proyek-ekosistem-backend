@@ -21,7 +21,7 @@ const WebSocket = require('ws');
 const axios = require('axios');
 const { OAuth2Client } = require('google-auth-library');
 const FormData = require('form-data');
-const PDFDocument = require('pdfkit');
+const PDFDocumentKit = require('pdfkit'); // Nama diubah agar tidak konflik
 const { PDFDocument } = require('pdf-lib');
 const archiver = require('archiver');
 
@@ -687,7 +687,7 @@ app.post('/api/images-to-pdf', upload.array('images'), async (req, res) => {
         }
 
         // Atur opsi dokumen PDF
-        const doc = new PDFDocument({
+        const doc = new PDFDocumentKit({
             size: pageSize,
             layout: orientation,
             autoFirstPage: false, // Kita akan menambah halaman secara manual

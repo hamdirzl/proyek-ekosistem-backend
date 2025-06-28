@@ -1085,6 +1085,43 @@ app.delete('/api/admin/jurnal/:id', authenticateAdmin, async (req, res) => {
     }
 });
 
+app.get('/api/admin/chat/conversations', authenticateAdmin, async (req, res) => {
+    try {
+        const query = `
+            WITH latest_messages AS (
+                SELECT 
+                    conversation_id,
+                    content,
+                    message_type,
+                    created_at,
+                    ROW_NUMBER() OVER(PARTITION BY conversation_id ORDER BY created_at DESC) as rn
+                FROM chat_messages
+            )
+            SELECT 
+                s.conversation_id,
+                s.user_name,
+                lm.content AS last_message,
+                lm.message_type AS last_message_type,
+                lm.created_at AS last_message_time
+            FROM chat_sessions s
+            LEFT JOIN latest_messages lm ON s.conversation_id = lm.conversation_id AND lm.rn = 1
+            ORDER BY lm.created_at DESC NULLS LAST;
+        `;
+
+        const result = await pool.query(query);
+
+        const conversationsWithStatus = result.rows.map(convo => ({
+            ...convo,
+            is_online: clients.has(convo.conversation_id)
+        }));
+
+        res.json(conversationsWithStatus);
+    } catch (error) {
+        console.error('Error fetching conversations for admin:', error);
+        res.status(500).json({ error: 'Gagal mengambil daftar percakapan.' });
+    }
+});
+
 // [BARU] ENDPOINT UNTUK UPLOAD FILE CHAT
 app.post('/api/chat/upload', upload.single('file'), async (req, res) => {
     try {
@@ -1322,6 +1359,16 @@ wss.on('connection', (ws, req) => {
                 ws.userName = data.session.userName;
                 clients.set(ws.userId, { ws: ws, name: ws.userName });
                 console.log(`Pengunjung teridentifikasi: ${ws.userName} (ID: ${ws.userId})`);
+
+                // === [BAGIAN BARU] Simpan/Update sesi ke database ===
+                pool.query(
+                    `INSERT INTO chat_sessions (conversation_id, user_name, last_active)
+                     VALUES ($1, $2, NOW())
+                     ON CONFLICT (conversation_id) 
+                     DO UPDATE SET user_name = EXCLUDED.user_name, last_active = NOW();`,
+                    [ws.userId, ws.userName]
+                ).catch(err => console.error("Gagal menyimpan sesi chat ke DB:", err));
+                // ========================================================
                 
                 if (adminWs && adminWs.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({ type: 'status_update', status: 'terhubung' }));

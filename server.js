@@ -21,7 +21,9 @@ const WebSocket = require('ws');
 const axios = require('axios');
 const { OAuth2Client } = require('google-auth-library');
 const FormData = require('form-data');
-const PDFDocumentKit = require('pdfkit'); // Nama diubah agar tidak konflik
+const PDFDocumentKit = require('pdfkit');
+const { PDFDocument } = require('pdf-lib');
+const archiver = require('archiver');
 
 // Inisialisasi Supabase Client
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
@@ -1271,6 +1273,104 @@ app.get('/api/chat/history/:conversationId', async (req, res) => {
     } catch (error) {
         console.error('Error fetching public chat history:', error);
         res.status(500).json({ error: 'Gagal mengambil riwayat percakapan.' });
+    }
+});
+
+// server.js
+
+app.post('/api/split-pdf', upload.single('pdfFile'), async (req, res) => {
+    if (!req.file) {
+        return res.status(400).json({ error: 'Tidak ada file PDF yang diunggah.' });
+    }
+
+    const { ranges } = req.body; // Misal: "1, 3-5, 8"
+    if (!ranges) {
+        await fs.unlink(req.file.path);
+        return res.status(400).json({ error: 'Rentang halaman tidak ditentukan.' });
+    }
+
+    const inputPath = req.file.path;
+    const tempDir = path.join(__dirname, 'uploads', `split-${Date.now()}`);
+    let createdFiles = [];
+
+    try {
+        await fs.mkdir(tempDir, { recursive: true });
+
+        const pdfBuffer = await fs.readFile(inputPath);
+        const sourcePdfDoc = await PDFDocument.load(pdfBuffer);
+        const totalPages = sourcePdfDoc.getPageCount();
+
+        // Parsing string rentang (contoh: "1, 3-5, 8") menjadi array angka halaman
+        const pagesToSplit = ranges.split(',').reduce((acc, part) => {
+            part = part.trim();
+            if (part.includes('-')) {
+                const [start, end] = part.split('-').map(Number);
+                if (!isNaN(start) && !isNaN(end)) {
+                    for (let i = start; i <= end; i++) {
+                        if (i > 0 && i <= totalPages) acc.push(i);
+                    }
+                }
+            } else {
+                const pageNum = Number(part);
+                if (!isNaN(pageNum) && pageNum > 0 && pageNum <= totalPages) {
+                    acc.push(pageNum);
+                }
+            }
+            return acc;
+        }, []);
+
+        if (pagesToSplit.length === 0) {
+            throw new Error('Rentang halaman tidak valid atau di luar jangkauan halaman dokumen.');
+        }
+
+        // Proses untuk membuat PDF baru untuk setiap halaman yang dipilih
+        for (let i = 0; i < pagesToSplit.length; i++) {
+            const pageNum = pagesToSplit[i];
+            const newPdfDoc = await PDFDocument.create();
+            const [copiedPage] = await newPdfDoc.copyPages(sourcePdfDoc, [pageNum - 1]); // Indeks berbasis nol
+            newPdfDoc.addPage(copiedPage);
+
+            const newPdfBytes = await newPdfDoc.save();
+            const outputFilePath = path.join(tempDir, `page_${pageNum}.pdf`);
+            await fs.writeFile(outputFilePath, newPdfBytes);
+            createdFiles.push({ path: outputFilePath, name: `page_${pageNum}.pdf` });
+        }
+
+        // Kirim sebagai satu file PDF jika hanya satu halaman yang dipilih
+        if (createdFiles.length === 1) {
+            res.download(createdFiles[0].path, createdFiles[0].name, async (err) => {
+                if (err) console.error('Error saat mengirim file:', err);
+                // Cleanup
+                await fs.rm(tempDir, { recursive: true, force: true });
+            });
+        } else {
+            // Buat file ZIP jika lebih dari satu halaman
+            const zipFileName = `split-files-${Date.now()}.zip`;
+            res.setHeader('Content-Type', 'application/zip');
+            res.setHeader('Content-Disposition', `attachment; filename=${zipFileName}`);
+
+            const archive = archiver('zip', { zlib: { level: 9 } });
+            archive.pipe(res);
+
+            for (const file of createdFiles) {
+                archive.file(file.path, { name: file.name });
+            }
+
+            await archive.finalize();
+            // Cleanup setelah selesai
+            await fs.rm(tempDir, { recursive: true, force: true });
+        }
+
+    } catch (error) {
+        console.error('Error saat memisahkan PDF:', error);
+        res.status(500).json({ error: 'Gagal memisahkan PDF: ' + error.message });
+        // Cleanup jika terjadi error
+        if (fsStream.existsSync(tempDir)) {
+             await fs.rm(tempDir, { recursive: true, force: true });
+        }
+    } finally {
+        // Selalu hapus file upload asli
+        await fs.unlink(inputPath);
     }
 });
 

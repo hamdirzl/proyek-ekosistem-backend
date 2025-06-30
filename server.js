@@ -1278,12 +1278,15 @@ app.get('/api/chat/history/:conversationId', async (req, res) => {
 
 // server.js
 
+// GANTI SELURUH ENDPOINT LAMA DENGAN YANG INI
 app.post('/api/split-pdf', upload.single('pdfFile'), async (req, res) => {
     if (!req.file) {
         return res.status(400).json({ error: 'Tidak ada file PDF yang diunggah.' });
     }
 
-    const { ranges } = req.body; // Misal: "1, 3-5, 8"
+    // Ambil 'mode' dari request, default ke 'extract' jika tidak ada
+    const { ranges, mode = 'extract' } = req.body; 
+    
     if (!ranges) {
         await fs.unlink(req.file.path);
         return res.status(400).json({ error: 'Rentang halaman tidak ditentukan.' });
@@ -1291,21 +1294,18 @@ app.post('/api/split-pdf', upload.single('pdfFile'), async (req, res) => {
 
     const inputPath = req.file.path;
     const tempDir = path.join(__dirname, 'uploads', `split-${Date.now()}`);
-    let createdFiles = [];
-
+    
     try {
-        await fs.mkdir(tempDir, { recursive: true });
-
         const pdfBuffer = await fs.readFile(inputPath);
         const sourcePdfDoc = await PDFDocument.load(pdfBuffer);
         const totalPages = sourcePdfDoc.getPageCount();
 
-        // Parsing string rentang (contoh: "1, 3-5, 8") menjadi array angka halaman
-        const pagesToSplit = ranges.split(',').reduce((acc, part) => {
+        // Logika parsing rentang tetap sama
+        const pagesToProcess = ranges.split(',').reduce((acc, part) => {
             part = part.trim();
             if (part.includes('-')) {
                 const [start, end] = part.split('-').map(Number);
-                if (!isNaN(start) && !isNaN(end)) {
+                if (!isNaN(start) && !isNaN(end) && start <= end) {
                     for (let i = start; i <= end; i++) {
                         if (i > 0 && i <= totalPages) acc.push(i);
                     }
@@ -1319,57 +1319,64 @@ app.post('/api/split-pdf', upload.single('pdfFile'), async (req, res) => {
             return acc;
         }, []);
 
-        if (pagesToSplit.length === 0) {
+        const uniquePages = [...new Set(pagesToProcess)].sort((a,b) => a - b);
+
+        if (uniquePages.length === 0) {
             throw new Error('Rentang halaman tidak valid atau di luar jangkauan halaman dokumen.');
         }
 
-        // Proses untuk membuat PDF baru untuk setiap halaman yang dipilih
-        for (let i = 0; i < pagesToSplit.length; i++) {
-            const pageNum = pagesToSplit[i];
-            const newPdfDoc = await PDFDocument.create();
-            const [copiedPage] = await newPdfDoc.copyPages(sourcePdfDoc, [pageNum - 1]); // Indeks berbasis nol
-            newPdfDoc.addPage(copiedPage);
+        // ================= LOGIKA BARU BERDASARKAN MODE =================
+        if (mode === 'merge') {
+            // MODE BARU: Gabungkan semua halaman pilihan menjadi satu PDF
+            const mergedPdfDoc = await PDFDocument.create();
+            const pageIndices = uniquePages.map(p => p - 1);
+            const copiedPages = await mergedPdfDoc.copyPages(sourcePdfDoc, pageIndices);
+            copiedPages.forEach(page => mergedPdfDoc.addPage(page));
+            
+            const mergedPdfBytes = await mergedPdfDoc.save();
+            const outputFileName = `merged_${ranges.replace(/, /g, '_').replace(/-/g, 'to')}.pdf`;
+            
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename=${outputFileName}`);
+            res.send(Buffer.from(mergedPdfBytes));
 
-            const newPdfBytes = await newPdfDoc.save();
-            const outputFilePath = path.join(tempDir, `page_${pageNum}.pdf`);
-            await fs.writeFile(outputFilePath, newPdfBytes);
-            createdFiles.push({ path: outputFilePath, name: `page_${pageNum}.pdf` });
-        }
+        } else { // mode === 'extract'
+            // MODE LAMA: Ekstrak setiap halaman menjadi file terpisah, lalu ZIP
+            await fs.mkdir(tempDir, { recursive: true });
+            let createdFiles = [];
 
-        // Kirim sebagai satu file PDF jika hanya satu halaman yang dipilih
-        if (createdFiles.length === 1) {
-            res.download(createdFiles[0].path, createdFiles[0].name, async (err) => {
-                if (err) console.error('Error saat mengirim file:', err);
-                // Cleanup
-                await fs.rm(tempDir, { recursive: true, force: true });
-            });
-        } else {
-            // Buat file ZIP jika lebih dari satu halaman
-            const zipFileName = `split-files-${Date.now()}.zip`;
-            res.setHeader('Content-Type', 'application/zip');
-            res.setHeader('Content-Disposition', `attachment; filename=${zipFileName}`);
-
-            const archive = archiver('zip', { zlib: { level: 9 } });
-            archive.pipe(res);
-
-            for (const file of createdFiles) {
-                archive.file(file.path, { name: file.name });
+            for (const pageNum of uniquePages) {
+                const newPdfDoc = await PDFDocument.create();
+                const [copiedPage] = await newPdfDoc.copyPages(sourcePdfDoc, [pageNum - 1]);
+                newPdfDoc.addPage(copiedPage);
+                const newPdfBytes = await newPdfDoc.save();
+                const outputFilePath = path.join(tempDir, `page_${pageNum}.pdf`);
+                await fs.writeFile(outputFilePath, newPdfBytes);
+                createdFiles.push({ path: outputFilePath, name: `page_${pageNum}.pdf` });
             }
 
-            await archive.finalize();
-            // Cleanup setelah selesai
-            await fs.rm(tempDir, { recursive: true, force: true });
+            if (createdFiles.length === 1) {
+                res.download(createdFiles[0].path, createdFiles[0].name, () => fs.rm(tempDir, { recursive: true, force: true }));
+            } else {
+                const zipFileName = `extracted_pages.zip`;
+                res.setHeader('Content-Type', 'application/zip');
+                res.setHeader('Content-Disposition', `attachment; filename=${zipFileName}`);
+                const archive = archiver('zip', { zlib: { level: 9 } });
+                archive.pipe(res);
+                createdFiles.forEach(file => archive.file(file.path, { name: file.name }));
+                await archive.finalize();
+                await fs.rm(tempDir, { recursive: true, force: true });
+            }
         }
+        // ===============================================================
 
     } catch (error) {
         console.error('Error saat memisahkan PDF:', error);
         res.status(500).json({ error: 'Gagal memisahkan PDF: ' + error.message });
-        // Cleanup jika terjadi error
         if (fsStream.existsSync(tempDir)) {
              await fs.rm(tempDir, { recursive: true, force: true });
         }
     } finally {
-        // Selalu hapus file upload asli
         await fs.unlink(inputPath);
     }
 });

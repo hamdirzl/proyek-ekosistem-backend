@@ -1289,19 +1289,25 @@ app.get('/api/chat/history/:conversationId', async (req, res) => {
 
 app.post('/api/split-pdf', upload.single('pdfFile'), async (req, res) => {
     if (!req.file) {
-        return res.status(400).json({ error: 'Tidak ada file yang diunggah.' });
+        return res.status(400).json({ error: 'Tidak ada file PDF yang diunggah.' });
     }
 
+    // Dapatkan path file sementara dari multer
+    const inputPath = req.file.path;
+
     try {
-        const { ranges, mode } = req.body; // 'mode' bisa 'mergeRanges' atau 'extractAll' dari frontend
-        const pdfDoc = await PDFDocument.load(req.file.buffer);
-        const totalPages = pdfDoc.getPageCount();
+        const { ranges, mode = 'extract' } = req.body;
         
-        if (typeof ranges !== 'string' || ranges.trim() === '') {
-             return res.status(400).json({ error: 'Rentang halaman tidak valid atau kosong.' });
+        if (!ranges) {
+            return res.status(400).json({ error: 'Rentang halaman tidak ditentukan.' });
         }
 
-        // 1. Parsing Input Rentang menjadi daftar halaman unik (misal: "1-3, 5" -> [1, 2, 3, 5])
+        // --- PERBAIKAN: Baca file dari path, bukan dari buffer ---
+        const pdfBuffer = await fs.readFile(inputPath);
+        const pdfDoc = await PDFDocument.load(pdfBuffer);
+        const totalPages = pdfDoc.getPageCount();
+
+        // Logika parsing rentang (tetap sama)
         const pagesToProcess = ranges.split(',').reduce((acc, part) => {
             part = part.trim();
             if (part.includes('-')) {
@@ -1326,12 +1332,8 @@ app.post('/api/split-pdf', upload.single('pdfFile'), async (req, res) => {
             return res.status(400).json({ error: 'Rentang halaman tidak valid atau di luar jangkauan.' });
         }
         
-        // 2. Menentukan Aksi Berdasarkan Tombol yang Diklik di Frontend
-        // Mode 'mergeRanges' -> Gabungkan rentang menjadi satu PDF
-        // Mode 'extractAll' -> Ekstrak setiap halaman menjadi file terpisah dalam ZIP
-
-        if (mode === 'mergeRanges') {
-            // --- LOGIKA UNTUK MENGGABUNGKAN SEMUA RENTANG MENJADI SATU PDF ---
+        // Logika mode 'merge' vs 'extract' (tetap sama)
+        if (mode === 'merge') {
             const pageIndices = uniquePages.map(p => p - 1);
 
             const mergedDoc = await PDFDocument.create();
@@ -1340,17 +1342,14 @@ app.post('/api/split-pdf', upload.single('pdfFile'), async (req, res) => {
             
             const pdfBytes = await mergedDoc.save();
 
-            // Mencatat penggunaan tool ke database (seperti kode asli Anda)
             pool.query('INSERT INTO tool_usage (tool_name) VALUES ($1)', ['Split PDF (Merge)']).catch(err => console.error('Gagal mencatat penggunaan tool:', err));
             
             res.setHeader('Content-Disposition', `attachment; filename="merged-pages.pdf"`);
             res.setHeader('Content-Type', 'application/pdf');
             return res.send(Buffer.from(pdfBytes));
 
-        } else { // Asumsikan mode default atau 'extractAll'
-            // --- LOGIKA UNTUK MEMISAHKAN SETIAP HALAMAN MENJADI ZIP ---
-            
-            // Jika hanya satu halaman yang diekstrak, kirim sebagai PDF tunggal
+        } else { // mode 'extract' atau default
+            // Jika hanya satu halaman, kirim sebagai PDF tunggal (lebih efisien)
             if (uniquePages.length === 1) {
                 const pageNum = uniquePages[0];
                 const subDoc = await PDFDocument.create();
@@ -1371,6 +1370,7 @@ app.post('/api/split-pdf', upload.single('pdfFile'), async (req, res) => {
             res.setHeader('Content-Disposition', `attachment; filename=split-pages.zip`);
             archive.pipe(res);
 
+            // Buat PDF untuk setiap halaman dan tambahkan ke ZIP
             for (const pageNum of uniquePages) {
                 const subDoc = await PDFDocument.create();
                 const [copiedPage] = await subDoc.copyPages(pdfDoc, [pageNum - 1]);
@@ -1379,17 +1379,22 @@ app.post('/api/split-pdf', upload.single('pdfFile'), async (req, res) => {
                 archive.append(Buffer.from(pdfBytes), { name: `page-${pageNum}.pdf` });
             }
 
-            // Mencatat penggunaan tool ke database
             pool.query('INSERT INTO tool_usage (tool_name) VALUES ($1)', ['Split PDF (Extract)']).catch(err => console.error('Gagal mencatat penggunaan tool:', err));
-
             await archive.finalize();
         }
 
     } catch (error) {
         console.error('Error splitting PDF:', error);
-        res.status(500).json({ error: 'Gagal memproses PDF: ' + error.message });
+        // Kirim response error dalam format JSON
+        if (!res.headersSent) {
+            res.status(500).json({ error: 'Gagal memproses PDF: ' + error.message });
+        }
+    } finally {
+        // --- PERBAIKAN: Selalu hapus file sementara setelah selesai ---
+        if (inputPath) {
+            await fs.unlink(inputPath).catch(err => console.error("Gagal menghapus file sementara:", err));
+        }
     }
-    // Tidak perlu 'finally' untuk menghapus file karena kita bekerja dengan buffer di memori
 });
 
 

@@ -1430,6 +1430,91 @@ app.get('/api/tools/stats', async (req, res) => {
     }
 });
 
+// === [BARU] GOOGLE AUTH ROUTES ===
+
+app.get('/api/auth/google', (req, res) => {
+    const authUrl = googleClient.generateAuthUrl({
+        access_type: 'offline',
+        prompt: 'consent',
+        scope: [
+            'https://www.googleapis.com/auth/userinfo.profile',
+            'https://www.googleapis.com/auth/userinfo.email',
+        ],
+    });
+    res.redirect(authUrl);
+});
+
+app.get('/api/auth/google/callback', async (req, res) => {
+    const { code } = req.query;
+
+    try {
+        // Tukar authorization code dengan tokens
+        const { tokens } = await googleClient.getToken(code);
+        googleClient.setCredentials(tokens);
+
+        // Dapatkan informasi pengguna dari Google
+        const { data: userInfo } = await googleClient.request({
+            url: 'https://www.googleapis.com/oauth2/v3/userinfo',
+        });
+
+        const { email, name, picture } = userInfo;
+        if (!email) {
+            return res.status(400).send('Gagal mendapatkan email dari Google.');
+        }
+
+        let user;
+        const client = await pool.connect();
+
+        try {
+            // Cek apakah pengguna sudah ada di database
+            const existingUserResult = await client.query('SELECT * FROM users WHERE email = $1', [email]);
+
+            if (existingUserResult.rows.length > 0) {
+                // Pengguna sudah ada, langsung loginkan
+                user = existingUserResult.rows[0];
+                console.log(`Pengguna Google yang kembali: ${user.email}`);
+            } else {
+                // Pengguna baru, daftarkan mereka
+                // Kita tidak menyimpan password, jadi kita bisa hash string acak atau null
+                const randomPassword = crypto.randomBytes(20).toString('hex');
+                const hashedPassword = await bcrypt.hash(randomPassword, 10);
+
+                const newUserResult = await client.query(
+                    'INSERT INTO users (email, password_hash, full_name, avatar_url, provider) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+                    [email, hashedPassword, name, picture, 'google']
+                );
+                user = newUserResult.rows[0];
+                console.log(`Pengguna Google baru terdaftar: ${user.email}`);
+            }
+
+            // Buat JWT untuk sesi aplikasi kita
+            const userPayload = { id: user.id, email: user.email, role: user.role };
+            const accessToken = jwt.sign(userPayload, process.env.JWT_SECRET, { expiresIn: '15m' });
+            const refreshToken = jwt.sign(userPayload, process.env.JWT_REFRESH_SECRET, { expiresIn: '90d' });
+
+            await client.query('UPDATE users SET refresh_token = $1 WHERE id = $2', [refreshToken, user.id]);
+
+            // Redirect ke halaman frontend dengan token
+            const frontendRedirectUrl = new URL(`${process.env.FRONTEND_URL}/auth-callback.html`);
+            frontendRedirectUrl.searchParams.set('accessToken', accessToken);
+            frontendRedirectUrl.searchParams.set('refreshToken', refreshToken);
+
+            res.redirect(frontendRedirectUrl.toString());
+
+        } finally {
+            client.release();
+        }
+
+    } catch (error) {
+        console.error('Error selama otentikasi Google:', error);
+        res.redirect(`${process.env.FRONTEND_URL}/auth.html?error=google-auth-failed`);
+    }
+});
+
+
+// !!! [PERBAIKAN] PINDAHKAN ROUTE INI KE BAGIAN AKHIR !!!
+// Route ini harus menjadi yang terakhir sebelum inisialisasi server
+// agar tidak menimpa route API lainnya.
 app.get('/:slug', async (req, res) => {
     try {
         const { slug } = req.params;
@@ -1438,6 +1523,7 @@ app.get('/:slug', async (req, res) => {
         if (link) {
             res.redirect(301, link.original_url);
         } else {
+            // Redirect ke halaman utama jika slug tidak ditemukan
             res.redirect(302, 'https://hamdirzl.my.id');
         }
     } catch (error) {
@@ -1607,86 +1693,6 @@ wss.on('close', function close() {
   clearInterval(interval);
 });
 
-// === [BARU] GOOGLE AUTH ROUTES ===
-
-app.get('/api/auth/google', (req, res) => {
-    const authUrl = googleClient.generateAuthUrl({
-        access_type: 'offline',
-        prompt: 'consent',
-        scope: [
-            'https://www.googleapis.com/auth/userinfo.profile',
-            'https://www.googleapis.com/auth/userinfo.email',
-        ],
-    });
-    res.redirect(authUrl);
-});
-
-app.get('/api/auth/google/callback', async (req, res) => {
-    const { code } = req.query;
-
-    try {
-        // Tukar authorization code dengan tokens
-        const { tokens } = await googleClient.getToken(code);
-        googleClient.setCredentials(tokens);
-
-        // Dapatkan informasi pengguna dari Google
-        const { data: userInfo } = await googleClient.request({
-            url: 'https://www.googleapis.com/oauth2/v3/userinfo',
-        });
-
-        const { email, name, picture } = userInfo;
-        if (!email) {
-            return res.status(400).send('Gagal mendapatkan email dari Google.');
-        }
-
-        let user;
-        const client = await pool.connect();
-
-        try {
-            // Cek apakah pengguna sudah ada di database
-            const existingUserResult = await client.query('SELECT * FROM users WHERE email = $1', [email]);
-
-            if (existingUserResult.rows.length > 0) {
-                // Pengguna sudah ada, langsung loginkan
-                user = existingUserResult.rows[0];
-                console.log(`Pengguna Google yang kembali: ${user.email}`);
-            } else {
-                // Pengguna baru, daftarkan mereka
-                // Kita tidak menyimpan password, jadi kita bisa hash string acak atau null
-                const randomPassword = crypto.randomBytes(20).toString('hex');
-                const hashedPassword = await bcrypt.hash(randomPassword, 10);
-
-                const newUserResult = await client.query(
-                    'INSERT INTO users (email, password_hash, full_name, avatar_url, provider) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-                    [email, hashedPassword, name, picture, 'google']
-                );
-                user = newUserResult.rows[0];
-                console.log(`Pengguna Google baru terdaftar: ${user.email}`);
-            }
-
-            // Buat JWT untuk sesi aplikasi kita
-            const userPayload = { id: user.id, email: user.email, role: user.role };
-            const accessToken = jwt.sign(userPayload, process.env.JWT_SECRET, { expiresIn: '15m' });
-            const refreshToken = jwt.sign(userPayload, process.env.JWT_REFRESH_SECRET, { expiresIn: '90d' });
-
-            await client.query('UPDATE users SET refresh_token = $1 WHERE id = $2', [refreshToken, user.id]);
-
-            // Redirect ke halaman frontend dengan token
-            const frontendRedirectUrl = new URL(`${process.env.FRONTEND_URL}/auth-callback.html`);
-            frontendRedirectUrl.searchParams.set('accessToken', accessToken);
-            frontendRedirectUrl.searchParams.set('refreshToken', refreshToken);
-
-            res.redirect(frontendRedirectUrl.toString());
-
-        } finally {
-            client.release();
-        }
-
-    } catch (error) {
-        console.error('Error selama otentikasi Google:', error);
-        res.redirect(`${process.env.FRONTEND_URL}/auth.html?error=google-auth-failed`);
-    }
-});
 
 // Panggilan server.listen HANYA SATU KALI di akhir file
 server.listen(PORT, '0.0.0.0', () => {

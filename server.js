@@ -1381,6 +1381,41 @@ app.post('/api/split-pdf', upload.single('pdfFile'), async (req, res) => {
     }
 });
 
+// TAMBAHKAN ENDPOINT BARU INI
+app.get('/api/tools/stats', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT 
+                tool_name, 
+                COUNT(*) as usage_count 
+            FROM tool_usage 
+            GROUP BY tool_name 
+            ORDER BY usage_count DESC 
+            LIMIT 3;
+        `);
+
+        // Mapping nama agar lebih ramah-tampilan
+        const toolNameMapping = {
+            'URL Shortener': { name: 'URL Shortener', href: 'tools/url-shortener.html', icon: '🔗' },
+            'Media Converter': { name: 'Media Converter', href: 'tools/media-converter.html', icon: '🔄' },
+            'QR Code Generator': { name: 'QR Code Generator', href: 'tools/qr-code-generator.html', icon: '📱' },
+            'Image Compressor': { name: 'Image Compressor', href: 'tools/image-compressor.html', icon: '🖼️' },
+            'Images to PDF': { name: 'Images to PDF', href: 'tools/images-to-pdf.html', icon: '📄' },
+            'Split PDF': { name: 'Split PDF', href: 'tools/split-pdf.html', icon: '✂️' }
+        };
+
+        const topTools = result.rows.map(row => ({
+            ...toolNameMapping[row.tool_name],
+            count: parseInt(row.usage_count, 10)
+        }));
+
+        res.json(topTools);
+    } catch (error) {
+        console.error('Error fetching tool stats:', error);
+        res.status(500).json({ error: 'Gagal mengambil statistik tool.' });
+    }
+});
+
 app.get('/:slug', async (req, res) => {
     try {
         const { slug } = req.params;

@@ -343,6 +343,8 @@ app.post('/api/shorten', async (req, res) => {
         const baseUrl = process.env.BASE_URL || `https://link.hamdirzl.my.id`;
         const fullShortUrl = `${baseUrl}/${newLink.rows[0].slug}`;
 
+         pool.query('INSERT INTO tool_usage (tool_name) VALUES ($1)', ['URL Shortener']).catch(err => console.error('Gagal mencatat penggunaan tool:', err));
+
         res.status(201).json({ 
             short_url: fullShortUrl,
             link_data: newLink.rows[0] 
@@ -459,6 +461,7 @@ app.post('/api/convert', upload.single('file'), async (req, res) => {
         console.log('Mendeteksi konversi gambar, menggunakan Sharp...');
         try {
             const outputBuffer = await sharp(inputPath).toFormat(outputFormat).toBuffer();
+            pool.query('INSERT INTO tool_usage (tool_name) VALUES ($1)', ['Media Converter']).catch(err => console.error('Gagal mencatat penggunaan tool:', err));
             res.set('Content-Type', `image/${outputFormat}`);
             res.set('Content-Disposition', `attachment; filename="converted-image.${outputFormat}"`);
             res.send(outputBuffer);
@@ -537,6 +540,7 @@ app.post('/api/convert', upload.single('file'), async (req, res) => {
             const downloadUrl = exportTask.result.files[0].url;
             
             const convertedFileResponse = await axios.get(downloadUrl, { responseType: 'arraybuffer' });
+            pool.query('INSERT INTO tool_usage (tool_name) VALUES ($1)', ['Media Converter']).catch(err => console.error('Gagal mencatat penggunaan tool:', err));
             
             res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
             res.setHeader('Content-Disposition', `attachment; filename="converted_${path.basename(req.file.originalname, '.pdf')}.docx"`);
@@ -567,6 +571,8 @@ app.post('/api/convert', upload.single('file'), async (req, res) => {
             docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
             pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
         };
+
+        pool.query('INSERT INTO tool_usage (tool_name) VALUES ($1)', ['Media Converter']).catch(err => console.error('Gagal mencatat penggunaan tool:', err));
 
         res.setHeader('Content-Type', mimeTypes[outputFormat] || 'application/octet-stream');
         res.setHeader('Content-Disposition', `attachment; filename="converted-file.${outputFormat}"`);
@@ -600,6 +606,7 @@ app.post('/api/generate-qr', async (req, res) => {
         };
 
         const qrDataUrl = await QRCode.toDataURL(text, qrOptions);
+        pool.query('INSERT INTO tool_usage (tool_name) VALUES ($1)', ['QR Code Generator']).catch(err => console.error('Gagal mencatat penggunaan tool:', err));
         res.json({ qrCodeImage: qrDataUrl, message: 'QR Code berhasil dibuat!' });
 
     } catch (error) {
@@ -649,6 +656,8 @@ app.post('/api/compress-image', upload.single('image'), async (req, res) => {
         }
         
         const compressedSize = Buffer.byteLength(compressedBuffer);
+
+        pool.query('INSERT INTO tool_usage (tool_name) VALUES ($1)', ['Image Compressor']).catch(err => console.error('Gagal mencatat penggunaan tool:', err));
 
         res.set('Content-Type', `image/${outputFormat}`);
         res.set('Content-Disposition', `attachment; filename="compressed-image.${outputFormat}"`);
@@ -735,6 +744,8 @@ app.post('/api/images-to-pdf', upload.array('images'), async (req, res) => {
                 await fs.unlink(file.path);
             }
         }
+
+        pool.query('INSERT INTO tool_usage (tool_name) VALUES ($1)', ['Images to PDF']).catch(err => console.error('Gagal mencatat penggunaan tool:', err));
 
         // Finalisasi dokumen PDF
         doc.end();
@@ -1335,7 +1346,7 @@ app.post('/api/split-pdf', upload.single('pdfFile'), async (req, res) => {
             
             const mergedPdfBytes = await mergedPdfDoc.save();
             const outputFileName = `merged_${ranges.replace(/, /g, '_').replace(/-/g, 'to')}.pdf`;
-            
+            pool.query('INSERT INTO tool_usage (tool_name) VALUES ($1)', ['Split PDF']).catch(err => console.error('Gagal mencatat penggunaan tool:', err));
             res.setHeader('Content-Type', 'application/pdf');
             res.setHeader('Content-Disposition', `attachment; filename=${outputFileName}`);
             res.send(Buffer.from(mergedPdfBytes));
@@ -1354,6 +1365,9 @@ app.post('/api/split-pdf', upload.single('pdfFile'), async (req, res) => {
                 await fs.writeFile(outputFilePath, newPdfBytes);
                 createdFiles.push({ path: outputFilePath, name: `page_${pageNum}.pdf` });
             }
+
+            pool.query('INSERT INTO tool_usage (tool_name) VALUES ($1)', ['Split PDF']).catch(err => console.error('Gagal mencatat penggunaan tool:', err));
+
 
             if (createdFiles.length === 1) {
                 res.download(createdFiles[0].path, createdFiles[0].name, () => fs.rm(tempDir, { recursive: true, force: true }));
